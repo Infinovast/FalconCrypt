@@ -12,6 +12,8 @@ import {
     XP_PROGRESS_SEGMENT_MAX,
 } from "./game/constants";
 import { gameState } from "./game/state";
+import type { ResourcePulseTone } from "./animations/combatAnimation";
+import type { RoomIntroKind } from "./animations/roomAnimation";
 import type { CharacterTuple, CombatActionType } from "./game/types";
 import type { ThresholdRule } from "./game/constants";
 import type { RoomEventType } from "./game/types";
@@ -442,6 +444,14 @@ function ProgressCompositeResource({ room, roomMax, floor, floorMax }: ProgressC
 export function App(): JSX.Element {
     const [stage, setStage] = useState<Stage>("menu");
     const [tick, setTick] = useState(0);
+    const [combatIntroTriggerKey, setCombatIntroTriggerKey] = useState(0);
+    const [combatActionTriggerKey, setCombatActionTriggerKey] = useState(0);
+    const [combatActionType, setCombatActionType] = useState<CombatActionType>("attack");
+    const [roomIntroTriggerKey, setRoomIntroTriggerKey] = useState(0);
+    const [roomIntroType, setRoomIntroType] = useState<RoomIntroKind>("branch_event");
+    const [resourcePulseTriggerKey, setResourcePulseTriggerKey] = useState(0);
+    const [resourcePulseTone, setResourcePulseTone] = useState<ResourcePulseTone>("gain");
+    const [resourcePulsePower, setResourcePulsePower] = useState(0.55);
     const [charOptions, setCharOptions] = useState<CharacterTuple[]>([]);
     const [hoveredChar, setHoveredChar] = useState<CharacterTuple | null>(null);
     const [activeEvent, setActiveEvent] = useState<RoomEventType | null>(null);
@@ -452,8 +462,16 @@ export function App(): JSX.Element {
     const coinPeakRef = useRef(1);
     const actionsRef = useRef<HTMLDivElement | null>(null);
     const actionAnimTimerRef = useRef<number | null>(null);
+    const prevStageRef = useRef<Stage>("menu");
 
     const snapshot = gameState.snapshot;
+    const resourceSnapshotRef = useRef({
+        hp: snapshot.player.hp,
+        defense: snapshot.player.defense,
+        food: snapshot.player.food,
+        coin: snapshot.player.coin,
+        xp: snapshot.player.xp,
+    });
     const previewChar = stage === "character" ? hoveredChar : null;
     const displayCharacter = previewChar ?? snapshot.player.character;
     const displayHp = previewChar ? previewChar[1] : snapshot.player.hp;
@@ -533,6 +551,56 @@ export function App(): JSX.Element {
             }
         };
     }, []);
+
+    useEffect(() => {
+        if (prevStageRef.current !== "combat" && stage === "combat") {
+            setCombatIntroTriggerKey((key) => key + 1);
+        }
+        prevStageRef.current = stage;
+    }, [stage]);
+
+    useEffect(() => {
+        if (stage === "menu" || stage === "character") {
+            resourceSnapshotRef.current = {
+                hp: snapshot.player.hp,
+                defense: snapshot.player.defense,
+                food: snapshot.player.food,
+                coin: snapshot.player.coin,
+                xp: snapshot.player.xp,
+            };
+            return;
+        }
+
+        const prev = resourceSnapshotRef.current;
+        const next = {
+            hp: snapshot.player.hp,
+            defense: snapshot.player.defense,
+            food: snapshot.player.food,
+            coin: snapshot.player.coin,
+            xp: snapshot.player.xp,
+        };
+
+        const deltas = [
+            next.hp - prev.hp,
+            next.defense - prev.defense,
+            next.food - prev.food,
+            next.coin - prev.coin,
+            next.xp - prev.xp,
+        ];
+        const positive = deltas.filter((v) => v > 0).reduce((sum, v) => sum + v, 0);
+        const negative = deltas.filter((v) => v < 0).reduce((sum, v) => sum + Math.abs(v), 0);
+        const totalAbs = deltas.reduce((sum, v) => sum + Math.abs(v), 0);
+
+        if (totalAbs > 0) {
+            const tone: ResourcePulseTone = positive > 0 && negative > 0 ? "mixed" : positive > 0 ? "gain" : "loss";
+            const power = Math.min(1, 0.26 + totalAbs / 20);
+            setResourcePulseTone(tone);
+            setResourcePulsePower(power);
+            setResourcePulseTriggerKey((key) => key + 1);
+        }
+
+        resourceSnapshotRef.current = next;
+    }, [snapshot.player.hp, snapshot.player.defense, snapshot.player.food, snapshot.player.coin, snapshot.player.xp, stage]);
 
     const runActionWithButtonAnimation = (clickedActionId: string, action: () => void) => {
         if (buttonsAnimating) return;
@@ -642,6 +710,9 @@ export function App(): JSX.Element {
         gameState.clearLogs();
         const evt = gameState.getCurrentRoomEvent();
         if (!evt) return;
+        const introType = evt as RoomEventType;
+        setRoomIntroType(introType);
+        setRoomIntroTriggerKey((key) => key + 1);
         setActiveRoomKey(roomKey);
         if (evt === "monster_event" || evt === "boss_event") {
             gameState.startRoomCombat(evt);
@@ -684,6 +755,8 @@ export function App(): JSX.Element {
     };
 
     const handleCombatAction = (actionType: CombatActionType) => {
+        setCombatActionType(actionType);
+        setCombatActionTriggerKey((key) => key + 1);
         if (actionType === "attack" || actionType === "critical") {
             gameState.clearCombatLogs();
         }
@@ -989,8 +1062,18 @@ export function App(): JSX.Element {
                     <ProgressCompositeResource room={snapshot.dungeon.roomIdx} roomMax={roomMax} floor={snapshot.dungeon.floor} floorMax={floorMax} />
                 </div>
 
-                <header className="panel-title mt">战斗动画</header>
-                <GameCanvas dangerLevel={dangerLevel} />
+                <header className="panel-title mt">动画</header>
+                <GameCanvas
+                    dangerLevel={dangerLevel}
+                    combatIntroTriggerKey={combatIntroTriggerKey}
+                    combatActionTriggerKey={combatActionTriggerKey}
+                    combatActionType={combatActionType}
+                    roomIntroTriggerKey={roomIntroTriggerKey}
+                    roomIntroType={roomIntroType}
+                    resourcePulseTriggerKey={resourcePulseTriggerKey}
+                    resourcePulseTone={resourcePulseTone}
+                    resourcePulsePower={resourcePulsePower}
+                />
             </section>
         </main>
     );
