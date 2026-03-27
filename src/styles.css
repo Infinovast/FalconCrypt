@@ -95,6 +95,12 @@ body,
     gap: 6px;
 }
 
+.map-room-node {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
 .map-room {
     border: 1px dashed rgba(136, 187, 202, 0.36);
     border-radius: 8px;
@@ -116,11 +122,41 @@ body,
     color: #ffe9b3;
 }
 
+.map-room.is-reordered {
+    border-style: solid;
+    border-color: rgba(255, 168, 104, 0.65);
+    background: rgba(255, 168, 104, 0.2);
+    color: #ffe2bf;
+}
+
+.map-room-branch {
+    border-style: solid;
+    border-color: rgba(104, 217, 255, 0.7);
+    background: rgba(104, 217, 255, 0.22);
+    color: #ddf5ff;
+}
+
+.map-branch-link {
+    width: 14px;
+    border-top: 1px solid rgba(151, 223, 255, 0.72);
+    opacity: 0.92;
+}
+
 .actions {
     margin-top: 10px;
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+}
+
+.event-tip {
+    width: 100%;
+    border: 1px solid rgba(255, 209, 102, 0.45);
+    background: rgba(255, 209, 102, 0.12);
+    color: #ffe8b7;
+    border-radius: 8px;
+    padding: 7px 9px;
+    font-size: 12px;
 }
 
 .shop-board {
@@ -333,6 +369,49 @@ button:hover {
     border-color: rgba(231, 255, 194, 0.94);
 }
 
+.resource-monster {
+    border-color: rgba(255, 164, 122, 0.42);
+}
+
+.monster-composite {
+    margin-top: 6px;
+    display: grid;
+    gap: 6px;
+}
+
+.monster-row {
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr) 72px;
+    align-items: center;
+    gap: 6px;
+}
+
+.monster-tag,
+.monster-value {
+    font-size: 11px;
+    color: var(--muted);
+}
+
+.monster-value {
+    text-align: right;
+}
+
+.monster-segment-bar {
+    display: grid;
+    grid-template-columns: repeat(14, minmax(0, 1fr));
+    gap: 3px;
+}
+
+.monster-segment-hp.on {
+    background: linear-gradient(180deg, rgba(255, 189, 139, 0.96), rgba(223, 96, 40, 0.95));
+    border-color: rgba(255, 216, 185, 0.95);
+}
+
+.monster-segment-atk.on {
+    background: linear-gradient(180deg, rgba(255, 157, 157, 0.96), rgba(220, 71, 71, 0.95));
+    border-color: rgba(255, 214, 214, 0.95);
+}
+
 .resource-xp {
     border-color: rgba(126, 167, 255, 0.38);
 }
@@ -503,6 +582,107 @@ button:hover {
     height: 520px;
 }
 
+.log-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.log-lane {
+    border: 1px solid rgba(136, 187, 202, 0.3);
+    border-radius: 10px;
+    background: rgba(8, 20, 30, 0.78);
+    padding: 8px;
+    min-height: 165px;
+}
+
+.log-lane-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+
+.log-lane-title {
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+}
+
+.log-lane-count {
+    min-width: 22px;
+    text-align: center;
+    font-size: 11px;
+    border-radius: 999px;
+    padding: 2px 6px;
+    background: rgba(136, 187, 202, 0.2);
+    color: #d8f4ff;
+}
+
+.log-lane-list {
+    display: grid;
+    gap: 6px;
+    max-height: 390px;
+    overflow-y: auto;
+    padding-right: 2px;
+}
+
+.log-empty {
+    font-size: 12px;
+    color: rgba(136, 187, 202, 0.75);
+    border: 1px dashed rgba(136, 187, 202, 0.3);
+    border-radius: 8px;
+    padding: 8px;
+}
+
+.log-entry {
+    border-radius: 8px;
+    border: 1px solid transparent;
+    padding: 6px 8px;
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+.log-entry-room {
+    border-color: rgba(79, 176, 255, 0.45);
+    background: linear-gradient(180deg, rgba(79, 176, 255, 0.2), rgba(79, 176, 255, 0.08));
+    color: #d8eeff;
+}
+
+.log-entry-combat {
+    border-color: rgba(255, 116, 116, 0.46);
+    background: linear-gradient(180deg, rgba(255, 116, 116, 0.2), rgba(255, 116, 116, 0.08));
+    color: #ffe1e1;
+}
+
+.log-entry-resource {
+    border-color: rgba(124, 232, 123, 0.45);
+    background: linear-gradient(180deg, rgba(124, 232, 123, 0.2), rgba(124, 232, 123, 0.08));
+    color: #def7de;
+}
+
+.log-entry-system {
+    border-color: rgba(255, 209, 102, 0.45);
+    background: linear-gradient(180deg, rgba(255, 209, 102, 0.2), rgba(255, 209, 102, 0.08));
+    color: #ffe9bd;
+}
+
+.log-lane-room {
+    box-shadow: 0 0 0 1px rgba(79, 176, 255, 0.15) inset;
+}
+
+.log-lane-combat {
+    box-shadow: 0 0 0 1px rgba(255, 116, 116, 0.15) inset;
+}
+
+.log-lane-resource {
+    box-shadow: 0 0 0 1px rgba(124, 232, 123, 0.15) inset;
+}
+
+.log-lane-system {
+    box-shadow: 0 0 0 1px rgba(255, 209, 102, 0.15) inset;
+}
+
 @media (max-width: 920px) {
     .shell {
         grid-template-columns: 1fr;
@@ -527,5 +707,17 @@ button:hover {
 
     .log-box-main {
         height: 360px;
+    }
+
+    .log-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .log-lane {
+        min-height: 132px;
+    }
+
+    .log-lane-list {
+        max-height: 220px;
     }
 }

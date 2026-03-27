@@ -27,6 +27,104 @@ type IconStripResourceProps = {
     threshold: ThresholdRule;
 };
 
+type LogCategory = "room" | "combat" | "resource" | "system";
+
+type CategorizedLog = {
+    id: string;
+    text: string;
+    category: LogCategory;
+};
+
+const LOG_SECTION_ORDER: LogCategory[] = ["room", "combat", "resource", "system"];
+
+const LOG_SECTION_TITLES: Record<LogCategory, string> = {
+    room: "房间日志",
+    combat: "战斗日志",
+    resource: "资源日志",
+    system: "系统日志",
+};
+
+const ROOM_LOG_MARKERS = [
+    "进入房间",
+    "触发事件",
+    "分支",
+    "路线",
+    "宝箱",
+    "陷阱",
+    "商人",
+    "篝火",
+    "铸锻",
+    "雕像",
+    "矿洞",
+];
+
+const COMBAT_LOG_MARKERS = [
+    "遭遇",
+    "造成伤害",
+    "反击",
+    "寒冰效果",
+    "暴击",
+    "净化生效",
+    "血祭生效",
+    "挑衅生效",
+    "击败",
+    "脱离战斗",
+    "Boss",
+    "阵亡",
+];
+
+const RESOURCE_LOG_MARKERS = [
+    "HP",
+    "Coin",
+    "Food",
+    "Def",
+    "XP",
+    "ATK",
+    "升级",
+    "恢复",
+    "损失",
+    "伤害",
+    "奖励",
+    "卷轴",
+];
+
+const classifyLog = (line: string): LogCategory => {
+    if (ROOM_LOG_MARKERS.some((marker) => line.includes(marker))) {
+        return "room";
+    }
+    if (COMBAT_LOG_MARKERS.some((marker) => line.includes(marker))) {
+        return "combat";
+    }
+    if (RESOURCE_LOG_MARKERS.some((marker) => line.includes(marker))) {
+        return "resource";
+    }
+    return "system";
+};
+
+const buildLogBuckets = (logs: string[]): Record<LogCategory, CategorizedLog[]> => {
+    const initial: Record<LogCategory, CategorizedLog[]> = {
+        room: [],
+        combat: [],
+        resource: [],
+        system: [],
+    };
+
+    logs.forEach((text, idx) => {
+        const category = classifyLog(text);
+        initial[category].push({
+            id: `${idx}-${text}`,
+            text,
+            category,
+        });
+    });
+
+    LOG_SECTION_ORDER.forEach((key) => {
+        initial[key] = initial[key].slice(-10).reverse();
+    });
+
+    return initial;
+};
+
 const calcLevelClass = (ratio: number, threshold: ThresholdRule): string => {
     if (threshold.warning === THRESHOLD_DISABLED || threshold.critical === THRESHOLD_DISABLED) {
         return "";
@@ -121,6 +219,13 @@ type XpCompositeResourceProps = {
     xpLevel: number;
 };
 
+type MonsterCompositeResourceProps = {
+    hp: number;
+    hpMax: number;
+    atk: number;
+    atkMax: number;
+};
+
 function XpCompositeResource({ xp, xpMax, xpLevel }: XpCompositeResourceProps): JSX.Element {
     const safeXpMax = Math.max(1, xpMax);
     const safeXp = Math.max(0, Math.min(xp, safeXpMax));
@@ -176,12 +281,70 @@ function XpCompositeResource({ xp, xpMax, xpLevel }: XpCompositeResourceProps): 
     );
 }
 
+function MonsterCompositeResource({ hp, hpMax, atk, atkMax }: MonsterCompositeResourceProps): JSX.Element {
+    const safeHpMax = Math.max(1, hpMax);
+    const safeAtkMax = Math.max(1, atkMax);
+    const clampedHp = Math.max(0, Math.min(hp, safeHpMax));
+    const clampedAtk = Math.max(0, Math.min(atk, safeAtkMax));
+    const segments = 14;
+    const hpFilled = Math.round((clampedHp / safeHpMax) * segments);
+    const atkFilled = Math.round((clampedAtk / safeAtkMax) * segments);
+
+    const hpDelta = useDeltaClass(hp);
+    const atkDelta = useDeltaClass(atk);
+    const deltaClass = hpDelta === "delta-down" || atkDelta === "delta-down" ? "delta-down" : hpDelta || atkDelta;
+
+    return (
+        <div className={`resource resource-monster ${deltaClass}`}>
+            <div className="resource-head">
+                <span className="resource-label">
+                    <span className="resource-icon" aria-hidden="true">
+                        ☠
+                    </span>
+                    怪物
+                </span>
+            </div>
+            <div className="monster-composite" role="img" aria-label={`怪物生命 ${clampedHp} / ${safeHpMax}，攻击 ${clampedAtk} / ${safeAtkMax}`}>
+                <div className="monster-row">
+                    <span className="monster-tag">生命</span>
+                    <div className="monster-segment-bar">
+                        {Array.from({ length: segments }, (_, idx) => (
+                            <span
+                                key={`monster-hp-${idx}`}
+                                className={idx < hpFilled ? "segment monster-segment-hp on" : "segment monster-segment-hp"}
+                            />
+                        ))}
+                    </div>
+                    <span className="monster-value">
+                        {clampedHp}/{safeHpMax}
+                    </span>
+                </div>
+                <div className="monster-row">
+                    <span className="monster-tag">ATK</span>
+                    <div className="monster-segment-bar">
+                        {Array.from({ length: segments }, (_, idx) => (
+                            <span
+                                key={`monster-atk-${idx}`}
+                                className={idx < atkFilled ? "segment monster-segment-atk on" : "segment monster-segment-atk"}
+                            />
+                        ))}
+                    </div>
+                    <span className="monster-value">
+                        {clampedAtk}/{safeAtkMax}
+                    </span>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 export function App(): JSX.Element {
     const [stage, setStage] = useState<Stage>("menu");
     const [tick, setTick] = useState(0);
     const [charOptions, setCharOptions] = useState<CharacterTuple[]>([]);
     const [hoveredChar, setHoveredChar] = useState<CharacterTuple | null>(null);
     const [activeEvent, setActiveEvent] = useState<RoomEventType | null>(null);
+    const [activeRoomKey, setActiveRoomKey] = useState<string | null>(null);
 
     const snapshot = gameState.snapshot;
     const previewChar = stage === "character" ? hoveredChar : null;
@@ -192,7 +355,14 @@ export function App(): JSX.Element {
     const displayFood = previewChar ? previewChar[4] : snapshot.player.food;
     const displayCoin = previewChar ? previewChar[2] : snapshot.player.coin;
     const displayExtraAtk = previewChar ? previewChar[5] : snapshot.player.extraAtk;
-    const displayScroll = previewChar ? (previewChar[0] === "盗贼" ? "随机卷轴" : "-") : snapshot.player.scroll ?? "-";
+    const pendingScroll = snapshot.player.pendingScroll;
+    const displayScroll = previewChar
+        ? previewChar[0] === "盗贼"
+            ? "随机卷轴"
+            : "-"
+        : pendingScroll
+            ? `${snapshot.player.scroll ?? "-"} (待替换 ${pendingScroll})`
+            : snapshot.player.scroll ?? "-";
     const dangerLevel = useMemo(() => Math.min(5, snapshot.dungeon.floor), [snapshot.dungeon.floor, tick]);
     const playerHpMax = Math.max(displayCharacter?.[1] ?? 1, displayHp, 1);
     const defenseMax = Math.max(1, displayDefenseMax);
@@ -202,34 +372,56 @@ export function App(): JSX.Element {
     const monsterMax = snapshot.combat.monsterName
         ? Math.max(18 + snapshot.dungeon.floor * 4, snapshot.combat.monsterHp, 1)
         : 1;
+    const monsterAtkMax = snapshot.combat.monsterName
+        ? Math.max(snapshot.dungeon.floor + 6, snapshot.combat.monsterAtk, 1)
+        : 1;
     const coinMax = Math.max(20, displayCoin, 1);
     const floorMax = Math.max(FLOOR, snapshot.dungeon.floor, 1);
+    const currentFloorRoomCount = snapshot.dungeon.floor + ROOM_ADD;
     const roomMax = Math.max(snapshot.dungeon.floor + ROOM_ADD, snapshot.dungeon.roomIdx, 1);
+    const exploreEnterLabel =
+        snapshot.dungeon.roomIdx === 1
+            ? "进入房间"
+            : snapshot.dungeon.roomIdx === currentFloorRoomCount
+                ? "开启Boss房"
+                : "下个房间";
     const showFullMap = displayCharacter?.[0] === "术士";
     const currentFloorMap = gameState.getMapRoomsForFloor(snapshot.dungeon.floor, showFullMap);
     const nextFloor = Math.min(FLOOR, snapshot.dungeon.floor + 1);
     const nextFloorMap = gameState.getMapRoomsForFloor(nextFloor, showFullMap);
     const shopInventory = stage === "event" && activeEvent === "shop_event" ? gameState.getShopInventoryView() : null;
+    const logBuckets = buildLogBuckets(snapshot.logs.slice(-48));
 
     const refresh = () => setTick((v) => v + 1);
 
     const finalizeRoomFlow = () => {
-        gameState.processRoomConsequences();
-        if (snapshot.player.hp <= 0) {
+        if (!activeRoomKey) {
+            return;
+        }
+
+        const result = gameState.finalizeCurrentRoom(activeRoomKey);
+        if (result.ignored) {
+            refresh();
+            return;
+        }
+
+        if (result.playerDied) {
             gameState.addLog("你在房间结算后倒下，本轮结束");
+            setActiveRoomKey(null);
             setActiveEvent(null);
             setStage("menu");
             return;
         }
 
-        gameState.moveNextRoom();
-        if (snapshot.dungeon.floor > FLOOR) {
+        if (result.dungeonCleared) {
             gameState.addLog("你击败了地牢终焉，获得鹰魂结晶！");
+            setActiveRoomKey(null);
             setActiveEvent(null);
             setStage("menu");
             return;
         }
 
+        setActiveRoomKey(null);
         setActiveEvent(null);
         setStage("explore");
     };
@@ -237,8 +429,10 @@ export function App(): JSX.Element {
     const startNewRun = () => {
         gameState.reset();
         setCharOptions(gameState.getCharacterOptions());
+        gameState.addLog("提示：鼠标悬停在角色按钮上可预览角色信息");
         setHoveredChar(null);
         setActiveEvent(null);
+        setActiveRoomKey(null);
         setStage("character");
         refresh();
     };
@@ -247,13 +441,17 @@ export function App(): JSX.Element {
         gameState.pickCharacter(index);
         setHoveredChar(null);
         setActiveEvent(null);
+        setActiveRoomKey(null);
         setStage("explore");
         refresh();
     };
 
     const enterRoom = () => {
+        const roomKey = `${snapshot.dungeon.floor}-${snapshot.dungeon.roomIdx}`;
+        gameState.clearLogs();
         const evt = gameState.getCurrentRoomEvent();
         if (!evt) return;
+        setActiveRoomKey(roomKey);
         if (evt === "monster_event" || evt === "boss_event") {
             gameState.startRoomCombat(evt);
             setStage("combat");
@@ -269,6 +467,18 @@ export function App(): JSX.Element {
         if (!activeEvent) return;
         const result = gameState.resolveRoomAction(activeEvent, actionId);
 
+        if (result.nextEventType) {
+            if (result.nextEventType === "monster_event" || result.nextEventType === "boss_event") {
+                gameState.startRoomCombat(result.nextEventType);
+                setStage("combat");
+            } else {
+                setActiveEvent(result.nextEventType);
+                gameState.addLog(`分支落点: ${gameState.getEventTitle(result.nextEventType)}`);
+            }
+            refresh();
+            return;
+        }
+
         if (result.combat) {
             gameState.startCombat(result.combat.monsterName, result.combat.hp, result.combat.atk, result.combat.isBoss);
             setStage("combat");
@@ -283,6 +493,7 @@ export function App(): JSX.Element {
     };
 
     const handleCombatAction = (actionType: CombatActionType) => {
+        gameState.clearCombatLogs();
         const result = gameState.performCombatAction(actionType);
 
         if (result.victory) {
@@ -293,11 +504,16 @@ export function App(): JSX.Element {
             gameState.finishCombat(false);
             finalizeRoomFlow();
         } else if (result.playerDied) {
-            gameState.addLog("你已阵亡，本轮结束");
+            gameState.addLog("你已阵亡，本次游戏结束");
             gameState.finishCombat(false);
             setActiveEvent(null);
             setStage("menu");
         }
+        refresh();
+    };
+
+    const resolvePendingScroll = (accept: boolean) => {
+        gameState.resolveScrollReplacement(accept);
         refresh();
     };
 
@@ -310,12 +526,19 @@ export function App(): JSX.Element {
                         <div className="map-floor-title">当前层 F{snapshot.dungeon.floor}</div>
                         <div className="map-room-list">
                             {currentFloorMap.map((room) => (
-                                <span
-                                    key={room.key}
-                                    className={`map-room ${room.revealed ? "is-revealed" : ""} ${room.isCurrent ? "is-current" : ""}`}
-                                >
-                                    {room.floor}-{room.index} {room.display}
-                                </span>
+                                <div key={room.key} className="map-room-node">
+                                    <span
+                                        className={`map-room ${room.revealed ? "is-revealed" : ""} ${room.isCurrent ? "is-current" : ""} ${room.reorderedByBranch ? "is-reordered" : ""}`}
+                                    >
+                                        {room.floor}-{room.index} {room.display}
+                                    </span>
+                                    {room.chosenBranchName && (
+                                        <>
+                                            <span className="map-branch-link" aria-hidden="true" />
+                                            <span className="map-room map-room-branch is-revealed">{room.chosenBranchName}</span>
+                                        </>
+                                    )}
+                                </div>
                             ))}
                         </div>
                     </div>
@@ -324,44 +547,109 @@ export function App(): JSX.Element {
                         <div className="map-floor-title">下一层 F{nextFloor}</div>
                         <div className="map-room-list">
                             {nextFloorMap.map((room) => (
-                                <span key={room.key} className={`map-room ${room.revealed ? "is-revealed" : ""}`}>
-                                    {room.floor}-{room.index} {room.display}
-                                </span>
+                                <div key={room.key} className="map-room-node">
+                                    <span className={`map-room ${room.revealed ? "is-revealed" : ""} ${room.reorderedByBranch ? "is-reordered" : ""}`}>
+                                        {room.floor}-{room.index} {room.display}
+                                    </span>
+                                    {room.chosenBranchName && (
+                                        <>
+                                            <span className="map-branch-link" aria-hidden="true" />
+                                            <span className="map-room map-room-branch is-revealed">{room.chosenBranchName}</span>
+                                        </>
+                                    )}
+                                </div>
                             ))}
                         </div>
                     </div>
                 </div>
 
-                <header className="panel-title">战斗/事件日志</header>
-                <div className="log-box log-box-main">
-                    {snapshot.logs.slice(-24).map((line, idx) => (
-                        <div key={`${line}-${idx}`}>{line}</div>
+                <header className="panel-title">日志</header>
+                <div className="log-grid" aria-label="按类别分组日志">
+                    {LOG_SECTION_ORDER.map((section) => (
+                        <section key={section} className={`log-lane log-lane-${section}`}>
+                            <header className="log-lane-head">
+                                <span className="log-lane-title">{LOG_SECTION_TITLES[section]}</span>
+                                <span className="log-lane-count">{logBuckets[section].length}</span>
+                            </header>
+                            <div className="log-lane-list">
+                                {logBuckets[section].length === 0 ? (
+                                    <div className="log-empty">暂无</div>
+                                ) : (
+                                    logBuckets[section].map((entry) => (
+                                        <div key={entry.id} className={`log-entry log-entry-${entry.category}`}>
+                                            {entry.text}
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </section>
                     ))}
                 </div>
                 <div className="actions">
-                    {stage === "menu" && <button onClick={startNewRun}>开始冒险</button>}
-                    {stage === "character" &&
-                        charOptions.map((c, i) => (
-                            <button
-                                key={c[0]}
-                                onClick={() => confirmCharacter(i)}
-                                onMouseEnter={() => setHoveredChar(c)}
-                                onMouseLeave={() => setHoveredChar(null)}
-                                onFocus={() => setHoveredChar(c)}
-                                onBlur={() => setHoveredChar(null)}
-                            >
-                                选择 {c[0]} / {c[6]}
-                            </button>
-                        ))}
-                    {stage === "explore" && <button onClick={enterRoom}>进入房间</button>}
-                    {stage === "event" &&
-                        activeEvent &&
-                        (activeEvent === "shop_event" && shopInventory ? (
-                            <div className="shop-board">
-                                <div className="shop-section">
-                                    <div className="shop-title">买入</div>
-                                    <div className="shop-list">
-                                        {shopInventory.buy.map((action) => (
+                    {pendingScroll ? (
+                        <>
+                            <button onClick={() => resolvePendingScroll(true)}>替换为 {pendingScroll}</button>
+                            <button onClick={() => resolvePendingScroll(false)}>保留当前卷轴</button>
+                        </>
+                    ) : (
+                        <>
+                            {stage === "menu" && <button onClick={startNewRun}>开始冒险</button>}
+                            {stage === "character" &&
+                                charOptions.map((c, i) => (
+                                    <button
+                                        key={c[0]}
+                                        onClick={() => confirmCharacter(i)}
+                                        onMouseEnter={() => setHoveredChar(c)}
+                                        onMouseLeave={() => setHoveredChar(null)}
+                                        onFocus={() => setHoveredChar(c)}
+                                        onBlur={() => setHoveredChar(null)}
+                                    >
+                                        选择 {c[0]} / {c[6]}
+                                    </button>
+                                ))}
+                            {stage === "explore" && <button onClick={enterRoom}>{exploreEnterLabel}</button>}
+                            {stage === "event" &&
+                                activeEvent &&
+                                (activeEvent === "shop_event" && shopInventory ? (
+                                    <div className="shop-board">
+                                        <div className="shop-section">
+                                            <div className="shop-title">买入</div>
+                                            <div className="shop-list">
+                                                {shopInventory.buy.map((action) => (
+                                                    <button
+                                                        key={action.id}
+                                                        onClick={() => executeRoomAction(action.id)}
+                                                        disabled={Boolean(action.disabledReason)}
+                                                        title={action.disabledReason}
+                                                    >
+                                                        {action.disabledReason ? `${action.label} (${action.disabledReason})` : action.label}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <div className="shop-section">
+                                            <div className="shop-title">卖出</div>
+                                            <div className="shop-list">
+                                                {shopInventory.sell.map((action) => (
+                                                    <button
+                                                        key={action.id}
+                                                        onClick={() => executeRoomAction(action.id)}
+                                                        disabled={Boolean(action.disabledReason)}
+                                                        title={action.disabledReason}
+                                                    >
+                                                        {action.disabledReason ? `${action.label} (${action.disabledReason})` : action.label}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <button onClick={() => executeRoomAction("leave")}>离开商人</button>
+                                    </div>
+                                ) : (
+                                    <>
+                                        {activeEvent === "mine_event" && (
+                                            <div className="event-tip">提示：本房间只要执行过挖掘，离开后将跳过通用房间结算。</div>
+                                        )}
+                                        {gameState.getRoomActions(activeEvent).map((action) => (
                                             <button
                                                 key={action.id}
                                                 onClick={() => executeRoomAction(action.id)}
@@ -371,48 +659,21 @@ export function App(): JSX.Element {
                                                 {action.disabledReason ? `${action.label} (${action.disabledReason})` : action.label}
                                             </button>
                                         ))}
-                                    </div>
-                                </div>
-                                <div className="shop-section">
-                                    <div className="shop-title">卖出</div>
-                                    <div className="shop-list">
-                                        {shopInventory.sell.map((action) => (
-                                            <button
-                                                key={action.id}
-                                                onClick={() => executeRoomAction(action.id)}
-                                                disabled={Boolean(action.disabledReason)}
-                                                title={action.disabledReason}
-                                            >
-                                                {action.disabledReason ? `${action.label} (${action.disabledReason})` : action.label}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                                <button onClick={() => executeRoomAction("leave")}>离开商人</button>
-                            </div>
-                        ) : (
-                            gameState.getRoomActions(activeEvent).map((action) => (
-                                <button
-                                    key={action.id}
-                                    onClick={() => executeRoomAction(action.id)}
-                                    disabled={Boolean(action.disabledReason)}
-                                    title={action.disabledReason}
-                                >
-                                    {action.disabledReason ? `${action.label} (${action.disabledReason})` : action.label}
-                                </button>
-                            ))
-                        ))}
-                    {stage === "combat" &&
-                        gameState.getCombatActions().map((action) => (
-                            <button
-                                key={action.id}
-                                onClick={() => handleCombatAction(action.id as CombatActionType)}
-                                disabled={Boolean(action.disabledReason)}
-                                title={action.disabledReason}
-                            >
-                                {action.disabledReason ? `${action.label} (${action.disabledReason})` : action.label}
-                            </button>
-                        ))}
+                                    </>
+                                ))}
+                            {stage === "combat" &&
+                                gameState.getCombatActions().map((action) => (
+                                    <button
+                                        key={action.id}
+                                        onClick={() => handleCombatAction(action.id as CombatActionType)}
+                                        disabled={Boolean(action.disabledReason)}
+                                        title={action.disabledReason}
+                                    >
+                                        {action.disabledReason ? `${action.label} (${action.disabledReason})` : action.label}
+                                    </button>
+                                ))}
+                        </>
+                    )}
                 </div>
             </section>
 
@@ -478,13 +739,11 @@ export function App(): JSX.Element {
                     />
                     <XpCompositeResource xp={snapshot.player.xp} xpMax={XP_MAX} xpLevel={snapshot.player.xpLevel} />
                     {stage === "combat" && (
-                        <SegmentedResource
-                            icon="☠"
-                            label="怪物生命"
-                            value={snapshot.combat.monsterHp || 0}
-                            max={monsterMax}
-                            tone="enemy"
-                            threshold={RESOURCE_THRESHOLD_RULES.enemy}
+                        <MonsterCompositeResource
+                            hp={snapshot.combat.monsterHp || 0}
+                            hpMax={monsterMax}
+                            atk={snapshot.combat.monsterAtk || 0}
+                            atkMax={monsterAtkMax}
                         />
                     )}
                     <IconStripResource

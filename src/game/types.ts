@@ -34,6 +34,9 @@ export interface RoomNode {
     eventType: RoomEventType;
     revealed: boolean;
     branches?: RoomTuple[];
+    chosenBranchName?: string;
+    chosenBranchEventType?: RoomEventType;
+    reorderedByBranch?: boolean;
 }
 
 export interface MapRoomView {
@@ -43,6 +46,8 @@ export interface MapRoomView {
     display: string;
     isCurrent: boolean;
     revealed: boolean;
+    chosenBranchName?: string;
+    reorderedByBranch: boolean;
 }
 
 export interface RoomAction {
@@ -69,6 +74,7 @@ export interface PlayerState {
     xp: number;
     xpLevel: number;
     scroll: ScrollType | null;
+    pendingScroll: ScrollType | null;
 }
 
 export interface DungeonState {

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
+import { BOSS_BY_FLOOR, CHARS } from "./constants";
 import { GameState } from "./state";
 
 afterEach(() => {
@@ -46,6 +47,86 @@ describe("GameState shop inventory", () => {
         expect(first.buy.length).toBeLessThanOrEqual(9);
         expect(second.buy.map((it) => it.id)).toEqual(first.buy.map((it) => it.id));
     });
+
+    it("purchase does not complete room and marks item sold out", () => {
+        const state = new GameState();
+        state.snapshot.player.coin = 99;
+        state.snapshot.dungeon.floor = 1;
+        state.snapshot.dungeon.roomIdx = 1;
+        state.snapshot.dungeon.map = {
+            "1-1": {
+                key: "1-1",
+                floor: 1,
+                index: 1,
+                name: "商人",
+                eventType: "shop_event",
+                revealed: true,
+            },
+        };
+
+        state.getCurrentRoomEvent();
+        const inventory = state.getShopInventoryView();
+        const buyAction =
+            inventory.buy.find((item) => !item.disabledReason && item.id !== "shop_buy_coin_bag") ??
+            inventory.buy.find((item) => !item.disabledReason);
+        expect(buyAction).toBeDefined();
+
+        const coinBefore = state.snapshot.player.coin;
+        const result = state.resolveRoomAction("shop_event", buyAction!.id);
+
+        expect(result.complete).toBe(false);
+        expect(state.snapshot.player.coin).toBeLessThan(coinBefore);
+
+        const after = state.getShopInventoryView();
+        const changedItem = after.buy.find((item) => item.id === buyAction!.id);
+        expect(changedItem?.disabledReason).toBe("已售出");
+    });
+
+    it("selling food does not complete room and updates resources", () => {
+        const state = new GameState();
+        state.snapshot.player.food = 2;
+        state.snapshot.player.coin = 0;
+        state.snapshot.dungeon.floor = 1;
+        state.snapshot.dungeon.roomIdx = 1;
+        state.snapshot.dungeon.map = {
+            "1-1": {
+                key: "1-1",
+                floor: 1,
+                index: 1,
+                name: "商人",
+                eventType: "shop_event",
+                revealed: true,
+            },
+        };
+
+        state.getCurrentRoomEvent();
+        const result = state.resolveRoomAction("shop_event", "shop_sell_food");
+
+        expect(result.complete).toBe(false);
+        expect(state.snapshot.player.food).toBe(1);
+        expect(state.snapshot.player.coin).toBe(1);
+    });
+
+    it("leaving shop completes room", () => {
+        const state = new GameState();
+        state.snapshot.dungeon.floor = 1;
+        state.snapshot.dungeon.roomIdx = 1;
+        state.snapshot.dungeon.map = {
+            "1-1": {
+                key: "1-1",
+                floor: 1,
+                index: 1,
+                name: "商人",
+                eventType: "shop_event",
+                revealed: true,
+            },
+        };
+
+        state.getCurrentRoomEvent();
+        const leaveResult = state.resolveRoomAction("shop_event", "leave");
+
+        expect(leaveResult.complete).toBe(true);
+    });
 });
 
 describe("GameState combat actions", () => {
@@ -89,5 +170,369 @@ describe("GameState combat actions", () => {
         expect(result.escaped).toBe(false);
         expect(state.snapshot.player.scroll).toBe("隐身术");
         expect(state.snapshot.player.hp).toBe(20);
+    });
+
+    it("thief gains scroll after boss victory", () => {
+        const state = new GameState();
+        state.snapshot.player.character = CHARS[2];
+        state.snapshot.player.scroll = null;
+
+        state.startCombat("测试Boss", 10, 2, true);
+        state.finishCombat(true);
+
+        expect(state.snapshot.player.scroll).not.toBeNull();
+    });
+
+    it("queues pending scroll instead of replacing immediately", () => {
+        const state = new GameState();
+        state.snapshot.player.character = CHARS[2];
+        state.snapshot.player.scroll = "治疗术";
+
+        vi.spyOn(Math, "random").mockReturnValue(0);
+
+        state.startCombat("测试Boss", 10, 2, true);
+        state.finishCombat(true);
+
+        expect(state.snapshot.player.scroll).toBe("治疗术");
+        expect(state.snapshot.player.pendingScroll).toBe("火球术");
+    });
+
+    it("applies pending scroll only after confirm", () => {
+        const state = new GameState();
+        state.snapshot.player.scroll = "治疗术";
+        state.snapshot.player.pendingScroll = "火球术";
+
+        state.resolveScrollReplacement(true);
+
+        expect(state.snapshot.player.scroll).toBe("火球术");
+        expect(state.snapshot.player.pendingScroll).toBe(null);
+    });
+
+    it("keeps current scroll after decline", () => {
+        const state = new GameState();
+        state.snapshot.player.scroll = "治疗术";
+        state.snapshot.player.pendingScroll = "火球术";
+
+        state.resolveScrollReplacement(false);
+
+        expect(state.snapshot.player.scroll).toBe("治疗术");
+        expect(state.snapshot.player.pendingScroll).toBe(null);
+    });
+
+    it("boss combat uses floor-specific boss name", () => {
+        const state = new GameState();
+        state.snapshot.dungeon.floor = 3;
+
+        state.startRoomCombat("boss_event");
+
+        expect(state.snapshot.combat.monsterName).toBe(BOSS_BY_FLOOR[2]);
+        expect(state.snapshot.combat.isBoss).toBe(true);
+    });
+});
+
+describe("GameState room consequences", () => {
+    it("can reduce hp to zero when starving", () => {
+        const state = new GameState();
+        state.snapshot.player.hp = 1;
+        state.snapshot.player.food = 0;
+        state.snapshot.dungeon.floor = 4;
+
+        state.processRoomConsequences();
+
+        expect(state.snapshot.player.hp).toBe(0);
+    });
+
+    it("levels up with overflow xp kept", () => {
+        const state = new GameState();
+        state.snapshot.player.xp = 17;
+        state.snapshot.player.xpLevel = 1;
+        state.snapshot.player.food = 1;
+        state.snapshot.player.hp = 10;
+        state.snapshot.dungeon.floor = 1;
+
+        state.processRoomConsequences();
+
+        expect(state.snapshot.player.xpLevel).toBe(3);
+        expect(state.snapshot.player.xp).toBe(1);
+    });
+
+    it("skips one room consequence after mine dig", () => {
+        const state = new GameState();
+        state.snapshot.player.hp = 20;
+        state.snapshot.player.food = 2;
+        state.snapshot.player.defense = 0;
+        state.snapshot.player.defenseMax = 3;
+        state.snapshot.dungeon.floor = 2;
+
+        vi.spyOn(Math, "random").mockReturnValue(0.99);
+
+        const digResult = state.resolveRoomAction("mine_event", "dig");
+        expect(digResult.complete).toBe(false);
+        expect(state.snapshot.player.food).toBe(1);
+
+        state.processRoomConsequences();
+        expect(state.snapshot.player.food).toBe(1);
+        expect(state.snapshot.player.defense).toBe(0);
+
+        state.processRoomConsequences();
+        expect(state.snapshot.player.food).toBe(0);
+        expect(state.snapshot.player.defense).toBe(1);
+    });
+
+    it("applies normal consequence when leaving mine without digging", () => {
+        const state = new GameState();
+        state.snapshot.player.hp = 20;
+        state.snapshot.player.food = 2;
+        state.snapshot.player.defense = 0;
+        state.snapshot.player.defenseMax = 3;
+        state.snapshot.dungeon.floor = 2;
+
+        state.resolveRoomAction("mine_event", "leave");
+        state.processRoomConsequences();
+
+        expect(state.snapshot.player.food).toBe(1);
+        expect(state.snapshot.player.defense).toBe(1);
+    });
+});
+
+describe("GameState branch feedback", () => {
+    it("writes path-oriented logs when choosing a branch", () => {
+        const state = new GameState();
+        state.snapshot.dungeon.floor = 1;
+        state.snapshot.dungeon.roomIdx = 1;
+        state.snapshot.dungeon.map = {
+            "1-1": {
+                key: "1-1",
+                floor: 1,
+                index: 1,
+                name: "分叉口",
+                eventType: "branch_event",
+                branches: [
+                    ["宝箱", "chest_event"],
+                    ["篝火", "bonfire_event"],
+                ],
+                revealed: true,
+            },
+            "1-2": {
+                key: "1-2",
+                floor: 1,
+                index: 2,
+                name: "怪物",
+                eventType: "monster_event",
+                revealed: false,
+            },
+            "1-3": {
+                key: "1-3",
+                floor: 1,
+                index: 3,
+                name: "商人",
+                eventType: "shop_event",
+                revealed: false,
+            },
+            "1-4": {
+                key: "1-4",
+                floor: 1,
+                index: 4,
+                name: "BOSS",
+                eventType: "boss_event",
+                revealed: true,
+            },
+        };
+
+        vi.spyOn(Math, "random").mockReturnValue(0);
+
+        const result = state.resolveRoomAction("branch_event", "branch_0");
+
+        expect(result.complete).toBe(false);
+        expect(result.nextEventType).toBe("chest_event");
+        expect(state.snapshot.dungeon.map["1-1"].chosenBranchName).toBe("宝箱");
+        expect(state.snapshot.logs.some((msg) => msg.includes("你沿着分支前进"))).toBe(true);
+        expect(state.snapshot.logs.some((msg) => msg.includes("路线变化"))).toBe(true);
+    });
+
+    it("keeps boss at final room and clears non-boss reveals after reorder", () => {
+        const state = new GameState();
+        state.snapshot.dungeon.floor = 1;
+        state.snapshot.dungeon.roomIdx = 1;
+        state.snapshot.dungeon.map = {
+            "1-1": {
+                key: "1-1",
+                floor: 1,
+                index: 1,
+                name: "分叉口",
+                eventType: "branch_event",
+                branches: [
+                    ["宝箱", "chest_event"],
+                    ["篝火", "bonfire_event"],
+                ],
+                revealed: true,
+            },
+            "1-2": {
+                key: "1-2",
+                floor: 1,
+                index: 2,
+                name: "宝箱",
+                eventType: "chest_event",
+                revealed: true,
+            },
+            "1-3": {
+                key: "1-3",
+                floor: 1,
+                index: 3,
+                name: "铸锻",
+                eventType: "forge_event",
+                revealed: true,
+            },
+            "1-4": {
+                key: "1-4",
+                floor: 1,
+                index: 4,
+                name: "BOSS",
+                eventType: "boss_event",
+                revealed: true,
+            },
+        };
+
+        vi.spyOn(Math, "random").mockReturnValue(0);
+
+        state.resolveRoomAction("branch_event", "branch_0");
+
+        expect(state.snapshot.dungeon.map["1-4"].eventType).toBe("boss_event");
+        expect(state.snapshot.dungeon.map["1-4"].revealed).toBe(true);
+        expect(state.snapshot.dungeon.map["1-2"].reorderedByBranch).toBe(true);
+        expect(state.snapshot.dungeon.map["1-3"].reorderedByBranch).toBe(true);
+        expect(state.snapshot.dungeon.map["1-2"].revealed).toBe(false);
+        expect(state.snapshot.dungeon.map["1-3"].revealed).toBe(false);
+    });
+
+    it("exposes chosen branch and reordered markers in map view", () => {
+        const state = new GameState();
+        state.snapshot.dungeon.floor = 1;
+        state.snapshot.dungeon.roomIdx = 1;
+        state.snapshot.dungeon.map = {
+            "1-1": {
+                key: "1-1",
+                floor: 1,
+                index: 1,
+                name: "分叉口",
+                eventType: "branch_event",
+                branches: [
+                    ["篝火", "bonfire_event"],
+                    ["宝箱", "chest_event"],
+                ],
+                revealed: true,
+                reorderedByBranch: false,
+            },
+            "1-2": {
+                key: "1-2",
+                floor: 1,
+                index: 2,
+                name: "雕像",
+                eventType: "statue_event",
+                revealed: true,
+                reorderedByBranch: false,
+            },
+            "1-3": {
+                key: "1-3",
+                floor: 1,
+                index: 3,
+                name: "商人",
+                eventType: "shop_event",
+                revealed: true,
+                reorderedByBranch: false,
+            },
+            "1-4": {
+                key: "1-4",
+                floor: 1,
+                index: 4,
+                name: "BOSS",
+                eventType: "boss_event",
+                revealed: true,
+                reorderedByBranch: false,
+            },
+        };
+
+        vi.spyOn(Math, "random").mockReturnValue(0);
+        state.resolveRoomAction("branch_event", "branch_0");
+
+        const floorMap = state.getMapRoomsForFloor(1, false);
+        const branch = floorMap.find((room) => room.key === "1-1");
+        const next = floorMap.find((room) => room.key === "1-2");
+
+        expect(branch?.chosenBranchName).toBe("篝火");
+        expect(next?.reorderedByBranch).toBe(true);
+    });
+});
+
+describe("GameState room finalize flow", () => {
+    it("ignores stale finalize request and prevents double advance", () => {
+        const state = new GameState();
+        state.snapshot.dungeon.floor = 1;
+        state.snapshot.dungeon.roomIdx = 1;
+        state.snapshot.player.hp = 20;
+        state.snapshot.player.food = 1;
+
+        const first = state.finalizeCurrentRoom("1-1");
+        const second = state.finalizeCurrentRoom("1-1");
+
+        expect(first.ignored).toBe(false);
+        expect(second.ignored).toBe(true);
+        expect(state.snapshot.dungeon.floor).toBe(1);
+        expect(state.snapshot.dungeon.roomIdx).toBe(2);
+    });
+
+    it("does not advance when player dies during room finalize", () => {
+        const state = new GameState();
+        state.snapshot.dungeon.floor = 4;
+        state.snapshot.dungeon.roomIdx = 3;
+        state.snapshot.player.hp = 1;
+        state.snapshot.player.food = 0;
+
+        vi.spyOn(Math, "random").mockReturnValue(0);
+
+        const result = state.finalizeCurrentRoom("4-3");
+
+        expect(result.ignored).toBe(false);
+        expect(result.playerDied).toBe(true);
+        expect(result.dungeonCleared).toBe(false);
+        expect(state.snapshot.dungeon.floor).toBe(4);
+        expect(state.snapshot.dungeon.roomIdx).toBe(3);
+    });
+
+    it("marks dungeon cleared after final room finalize", () => {
+        const state = new GameState();
+        state.snapshot.dungeon.floor = 4;
+        state.snapshot.dungeon.roomIdx = 7;
+        state.snapshot.player.hp = 20;
+        state.snapshot.player.food = 1;
+
+        const result = state.finalizeCurrentRoom("4-7");
+
+        expect(result.ignored).toBe(false);
+        expect(result.playerDied).toBe(false);
+        expect(result.dungeonCleared).toBe(true);
+        expect(state.snapshot.dungeon.floor).toBe(5);
+        expect(state.snapshot.dungeon.roomIdx).toBe(1);
+    });
+
+    it("clears only combat logs", () => {
+        const state = new GameState();
+        state.snapshot.logs = [
+            "进入房间: 怪物",
+            "遭遇 蜘蛛",
+            "造成伤害 5",
+            "Coin +3",
+            "地图已生成",
+            "你已阵亡，本次游戏结束",
+        ];
+
+        state.clearCombatLogs();
+
+        expect(state.snapshot.logs).toContain("进入房间: 怪物");
+        expect(state.snapshot.logs).toContain("Coin +3");
+        expect(state.snapshot.logs).toContain("地图已生成");
+        expect(state.snapshot.logs.some((line) => line.includes("遭遇"))).toBe(false);
+        expect(state.snapshot.logs.some((line) => line.includes("造成伤害"))).toBe(false);
+        expect(state.snapshot.logs.some((line) => line.includes("阵亡"))).toBe(false);
     });
 });

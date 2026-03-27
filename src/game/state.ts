@@ -60,6 +60,7 @@ type RoomActionResult = {
         atk: number;
         isBoss?: boolean;
     };
+    nextEventType?: RoomEventType;
 };
 
 type ShopBuyStockItem = {
@@ -67,6 +68,12 @@ type ShopBuyStockItem = {
     name: string;
     cost: number;
     soldOut: boolean;
+};
+
+type FinalizeRoomResult = {
+    ignored: boolean;
+    playerDied: boolean;
+    dungeonCleared: boolean;
 };
 
 const ROOM_EVENT_NAMES: Record<string, string> = {
@@ -80,10 +87,33 @@ const ROOM_EVENT_NAMES: Record<string, string> = {
     mine_event: "矿洞房",
 };
 
+const COMBAT_LOG_MARKERS = [
+    "遭遇",
+    "造成伤害",
+    "反击",
+    "寒冰效果",
+    "暴击",
+    "净化生效",
+    "血祭生效",
+    "挑衅生效",
+    "击败",
+    "脱离战斗",
+    "Boss",
+    "阵亡",
+    "无法释放暴击",
+    "无法使用技能",
+    "无法使用卷轴",
+    "火球术",
+    "冻结敌人",
+    "治疗术",
+    "隐身术",
+];
+
 export class GameState {
     private chosenChars: CharacterTuple[] = [];
     private shopRoomKey: string | null = null;
     private shopBuyStock: ShopBuyStockItem[] = [];
+    private skipRoomConsequenceOnce = false;
 
     snapshot: GameSnapshot = {
         player: {
@@ -99,6 +129,7 @@ export class GameState {
             xp: 0,
             xpLevel: 1,
             scroll: null,
+            pendingScroll: null,
         },
         dungeon: {
             floor: 1,
@@ -133,6 +164,7 @@ export class GameState {
             xp: 0,
             xpLevel: 1,
             scroll: null,
+            pendingScroll: null,
         };
         this.snapshot.dungeon = { floor: 1, roomIdx: 1, map: {} };
         this.snapshot.combat = {
@@ -149,6 +181,7 @@ export class GameState {
         this.snapshot.logs = [];
         this.shopRoomKey = null;
         this.shopBuyStock = [];
+        this.skipRoomConsequenceOnce = false;
     }
 
     getCharacterOptions(): CharacterTuple[] {
@@ -193,6 +226,7 @@ export class GameState {
                     name: tuple[0],
                     eventType: tuple[1] as RoomEventType,
                     revealed: tuple[1] === "boss_event",
+                    reorderedByBranch: false,
                 };
             }
 
@@ -217,6 +251,7 @@ export class GameState {
                     eventType: "branch_event",
                     branches,
                     revealed: false,
+                    reorderedByBranch: false,
                 };
             });
         }
@@ -254,6 +289,8 @@ export class GameState {
                 isCurrent: this.snapshot.dungeon.floor === floor && this.snapshot.dungeon.roomIdx === idx,
                 revealed,
                 display: revealed ? room.name : "?",
+                chosenBranchName: revealed && room.eventType === "branch_event" ? room.chosenBranchName : undefined,
+                reorderedByBranch: room.reorderedByBranch === true,
             });
         }
         return views;
@@ -282,6 +319,20 @@ export class GameState {
                 disabledReason: this.getScrollDisabledReason(),
             },
         ];
+    }
+
+    resolveScrollReplacement(accept: boolean): void {
+        const pending = this.snapshot.player.pendingScroll;
+        if (!pending) return;
+
+        if (accept) {
+            const prev = this.snapshot.player.scroll;
+            this.snapshot.player.scroll = pending;
+            this.addLog(prev ? `卷轴替换: ${prev} -> ${pending}` : `获得卷轴: ${pending}`);
+        } else {
+            this.addLog(`放弃卷轴: ${pending}`);
+        }
+        this.snapshot.player.pendingScroll = null;
     }
 
     getRoomActions(eventType: RoomEventType): RoomAction[] {
@@ -427,6 +478,26 @@ export class GameState {
         }
     }
 
+    finalizeCurrentRoom(expectedRoomKey: string): FinalizeRoomResult {
+        const currentKey = `${this.snapshot.dungeon.floor}-${this.snapshot.dungeon.roomIdx}`;
+        if (currentKey !== expectedRoomKey) {
+            this.addLog("房间结算请求已过期，忽略重复结算");
+            return { ignored: true, playerDied: false, dungeonCleared: false };
+        }
+
+        this.processRoomConsequences();
+        if (this.snapshot.player.hp <= 0) {
+            return { ignored: false, playerDied: true, dungeonCleared: false };
+        }
+
+        this.moveNextRoom();
+        return {
+            ignored: false,
+            playerDied: false,
+            dungeonCleared: this.snapshot.dungeon.floor > FLOOR,
+        };
+    }
+
     startRoomCombat(eventType: RoomEventType): void {
         if (eventType === "boss_event") {
             const boss = this.generateBossEncounter(this.snapshot.dungeon.floor);
@@ -541,6 +612,12 @@ export class GameState {
     }
 
     processRoomConsequences(): void {
+        if (this.skipRoomConsequenceOnce) {
+            this.skipRoomConsequenceOnce = false;
+            this.addLog("本房间已执行矿洞挖掘，跳过通用结算");
+            return;
+        }
+
         if (this.snapshot.player.xp >= XP_MAX) {
             const gained = Math.floor(this.snapshot.player.xp / XP_MAX);
             this.snapshot.player.xp %= XP_MAX;
@@ -570,6 +647,16 @@ export class GameState {
         if (this.snapshot.logs.length > 60) {
             this.snapshot.logs.shift();
         }
+    }
+
+    clearLogs(): void {
+        this.snapshot.logs = [];
+    }
+
+    clearCombatLogs(): void {
+        this.snapshot.logs = this.snapshot.logs.filter(
+            (line) => !COMBAT_LOG_MARKERS.some((marker) => line.includes(marker)),
+        );
     }
 
     private randomFrom<T>(arr: T[]): T {
@@ -622,9 +709,15 @@ export class GameState {
 
     private gainRandomScroll(forceScroll?: ScrollType): void {
         const nextScroll = forceScroll ?? this.randomFrom([...SCROLL_LIST]);
-        const prev = this.snapshot.player.scroll;
-        this.snapshot.player.scroll = nextScroll;
-        this.addLog(prev ? `卷轴替换: ${prev} -> ${nextScroll}` : `获得卷轴: ${nextScroll}`);
+
+        if (!this.snapshot.player.scroll) {
+            this.snapshot.player.scroll = nextScroll;
+            this.addLog(`获得卷轴: ${nextScroll}`);
+            return;
+        }
+
+        this.snapshot.player.pendingScroll = nextScroll;
+        this.addLog(`发现新卷轴: ${nextScroll}，请选择是否替换当前卷轴`);
     }
 
     private getCriticalDisabledReason(): string | undefined {
@@ -1111,6 +1204,8 @@ export class GameState {
             this.applyDamage(randomInt(ROOM_RANGES.mine.noFoodTrueDamage.min, ROOM_RANGES.mine.noFoodTrueDamage.max), true);
         }
 
+        this.skipRoomConsequenceOnce = true;
+
         const roll = randomInt(1, 100);
         if (roll <= ROOM_RANGES.mine.chestRateUpper) {
             this.addLog("挖到埋藏宝箱");
@@ -1181,36 +1276,54 @@ export class GameState {
     }
 
     private resolveBranchAction(actionId: string): RoomActionResult {
+        const room = this.getCurrentRoomNode();
+
         if (actionId === "leave") {
-            this.addLog("绕过分叉口，保持原路径");
+            if (room) {
+                room.chosenBranchName = undefined;
+                room.chosenBranchEventType = undefined;
+            }
+            this.addLog("放弃分支，沿原路线前进");
             return { complete: true };
         }
 
-        const room = this.getCurrentRoomNode();
         if (!room?.branches || room.branches.length === 0) {
             return { complete: true };
         }
 
         const selectedIdx = Number(actionId.replace("branch_", ""));
         const selected = room.branches[selectedIdx];
-        if (selected) {
-            this.addLog(`选择分支: ${selected[0]}`);
+        if (!selected) {
+            this.addLog("分支选择无效");
+            return { complete: false };
+        }
+
+        const selectedEventType = selected[1] as RoomEventType;
+        room.chosenBranchName = selected[0];
+        room.chosenBranchEventType = selectedEventType;
+        this.addLog(`你沿着分支前进: ${selected[0]}`);
+
+        if (selectedEventType === "shop_event") {
+            this.ensureShopInventory();
         }
 
         if (Math.random() < BRANCH_REORDER_SUCCESS_RATE) {
             this.reorderCurrentFloorFutureRooms();
-            this.addLog("分叉判定成功：后续房间顺序被扰动");
+            this.addLog("路线变化：后续房间顺序被扰动");
         } else {
-            this.addLog("分叉判定未触发重排");
+            this.addLog("路线保持：后续房间顺序未变化");
         }
-        return { complete: true };
+        return { complete: false, nextEventType: selectedEventType };
     }
 
     private reorderCurrentFloorFutureRooms(): void {
         const floor = this.snapshot.dungeon.floor;
         const roomCount = floor + ROOM_ADD;
         const currentIdx = this.snapshot.dungeon.roomIdx;
-        const futureIdxs = Array.from({ length: roomCount - currentIdx }, (_, i) => currentIdx + 1 + i);
+        const futureEnd = roomCount - 1;
+        if (currentIdx >= futureEnd) return;
+
+        const futureIdxs = Array.from({ length: futureEnd - currentIdx }, (_, i) => currentIdx + 1 + i);
         const futureRooms = futureIdxs.map((idx) => this.snapshot.dungeon.map[`${floor}-${idx}`]).filter(Boolean);
 
         for (let i = futureRooms.length - 1; i > 0; i -= 1) {
@@ -1228,6 +1341,7 @@ export class GameState {
                 floor,
                 index: idx,
                 revealed: source.eventType === "boss_event",
+                reorderedByBranch: true,
             };
         });
     }
