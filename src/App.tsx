@@ -50,10 +50,10 @@ type CategorizedLog = {
 const LOG_SECTION_ORDER: LogCategory[] = ["room", "combat", "resource", "system"];
 
 const LOG_SECTION_TITLES: Record<LogCategory, string> = {
-    room: "房间日志",
-    combat: "战斗日志",
-    resource: "资源日志",
-    system: "系统日志",
+    room: "房间",
+    combat: "战斗",
+    resource: "资源",
+    system: "系统",
 };
 
 const ROOM_LOG_MARKERS = [
@@ -83,6 +83,13 @@ const COMBAT_LOG_MARKERS = [
     "脱离战斗",
     "Boss",
     "阵亡",
+    "无法释放暴击",
+    "无法使用技能",
+    "无法使用卷轴",
+    "火球术",
+    "冻结敌人",
+    "治疗术",
+    "隐身术",
 ];
 
 const RESOURCE_LOG_MARKERS = [

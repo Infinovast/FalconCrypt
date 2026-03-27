@@ -625,19 +625,16 @@ export class GameState {
         }
 
         if (this.snapshot.player.food > 0) {
-            this.snapshot.player.food -= 1;
+            this.addFood(-1, "食物消耗");
             const heal = randomInt(ROOM_RANGES.roomConsequence.healMin, this.snapshot.dungeon.floor + 2);
-            this.snapshot.player.hp += heal;
-            this.addLog(`食物恢复 HP +${heal}`);
+            this.addHp(heal, "食物恢复");
         } else {
             const loss = randomInt(ROOM_RANGES.roomConsequence.hungerLossMin, this.snapshot.dungeon.floor + 2);
-            this.snapshot.player.hp = Math.max(0, this.snapshot.player.hp - loss);
-            this.addLog(`饥饿损失 HP -${loss}`);
+            this.addHp(-loss, "饥饿损失");
         }
 
         if (this.snapshot.player.defense < this.snapshot.player.defenseMax) {
-            this.snapshot.player.defense = Math.min(this.snapshot.player.defenseMax, this.snapshot.player.defense + 1);
-            this.addLog("护甲自然恢复 Def +1");
+            this.addDefense(1, "护甲恢复");
         }
     }
 
@@ -662,35 +659,40 @@ export class GameState {
         return arr[randomInt(0, arr.length - 1)];
     }
 
-    private addXp(amount: number): void {
+    private formatResourceLog(label: string, amount: number, source?: string): string {
+        const valueText = `${label} ${amount >= 0 ? "+" : ""}${amount}`;
+        return source ? `${source}: ${valueText}` : valueText;
+    }
+
+    private addXp(amount: number, source?: string): void {
         this.snapshot.player.xp = Math.max(0, this.snapshot.player.xp + amount);
-        this.addLog(`XP ${amount >= 0 ? "+" : ""}${amount}`);
+        this.addLog(this.formatResourceLog("XP", amount, source));
     }
 
-    private addCoin(amount: number): void {
+    private addCoin(amount: number, source?: string): void {
         this.snapshot.player.coin = Math.max(0, this.snapshot.player.coin + amount);
-        this.addLog(`Coin ${amount >= 0 ? "+" : ""}${amount}`);
+        this.addLog(this.formatResourceLog("Coin", amount, source));
     }
 
-    private addFood(amount: number): void {
+    private addFood(amount: number, source?: string): void {
         this.snapshot.player.food = Math.max(0, this.snapshot.player.food + amount);
-        this.addLog(`Food ${amount >= 0 ? "+" : ""}${amount}`);
+        this.addLog(this.formatResourceLog("Food", amount, source));
     }
 
-    private addHp(amount: number): void {
+    private addHp(amount: number, source?: string): void {
         this.snapshot.player.hp = Math.max(0, this.snapshot.player.hp + amount);
-        this.addLog(`HP ${amount >= 0 ? "+" : ""}${amount}`);
+        this.addLog(this.formatResourceLog("HP", amount, source));
     }
 
-    private addDefense(amount: number): void {
+    private addDefense(amount: number, source?: string): void {
         this.snapshot.player.defense = Math.max(0, Math.min(this.snapshot.player.defenseMax, this.snapshot.player.defense + amount));
-        this.addLog(`Def ${amount >= 0 ? "+" : ""}${amount}`);
+        this.addLog(this.formatResourceLog("Def", amount, source));
     }
 
-    private addDefenseMax(amount: number): void {
+    private addDefenseMax(amount: number, source?: string): void {
         this.snapshot.player.defenseMax = Math.max(1, this.snapshot.player.defenseMax + amount);
         this.snapshot.player.defense = Math.min(this.snapshot.player.defense, this.snapshot.player.defenseMax);
-        this.addLog(`Def Max ${amount >= 0 ? "+" : ""}${amount}`);
+        this.addLog(this.formatResourceLog("Def Max", amount, source));
     }
 
     private applyDamage(amount: number, trueDamage = false): void {
@@ -880,21 +882,20 @@ export class GameState {
         this.addLog(`宝箱开启，奖励 ${picked.size} 项`);
         picked.forEach((reward) => {
             if (reward === "coin") {
-                this.addCoin(randomInt(ROOM_RANGES.chestCoin.min, ROOM_RANGES.chestCoin.max));
+                this.addCoin(randomInt(ROOM_RANGES.chestCoin.min, ROOM_RANGES.chestCoin.max), "宝箱金币");
             } else if (reward === "cloudy") {
                 const delta = randomInt(ROOM_RANGES.cloudyPotion.min, ROOM_RANGES.cloudyPotion.max);
                 const safeDelta = this.snapshot.player.hp + delta <= 0 ? 1 - this.snapshot.player.hp : delta;
-                this.addHp(safeDelta);
-                this.addLog("使用了浑浊的药水");
+                this.addHp(safeDelta, "浑浊药水");
             } else if (reward === "life") {
-                this.addHp(6);
+                this.addHp(6, "生命药水");
             } else if (reward === "whetstone") {
                 this.snapshot.player.extraAtk += 1;
-                this.addLog("ATK Extra +1");
+                this.addLog("磨刀石: ATK Extra +1");
             } else if (reward === "poor_armor") {
-                this.addDefense(randomInt(ROOM_RANGES.poorArmor.min, ROOM_RANGES.poorArmor.max));
+                this.addDefense(randomInt(ROOM_RANGES.poorArmor.min, ROOM_RANGES.poorArmor.max), "破损护甲");
             } else if (reward === "superior_armor") {
-                this.addDefenseMax(2);
+                this.addDefenseMax(2, "精良护甲");
             } else if (reward === "scroll") {
                 this.gainRandomScroll();
             }
@@ -913,14 +914,14 @@ export class GameState {
                 this.gainRandomScroll("火球术");
             } else if (trap === "acid") {
                 this.snapshot.player.extraAtk += 1;
-                this.addLog("奖励: 磨刀石，ATK Extra +1");
+                this.addLog("磨刀石奖励: ATK Extra +1");
             } else if (trap === "rock") {
-                this.addCoin(randomInt(ROOM_RANGES.trapReward.rockCoin.min, ROOM_RANGES.trapReward.rockCoin.max));
+                this.addCoin(randomInt(ROOM_RANGES.trapReward.rockCoin.min, ROOM_RANGES.trapReward.rockCoin.max), "岩石奖励");
             } else {
                 if (Math.random() < 0.5) {
-                    this.addFood(randomInt(ROOM_RANGES.trapReward.spikeFood.min, ROOM_RANGES.trapReward.spikeFood.max));
+                    this.addFood(randomInt(ROOM_RANGES.trapReward.spikeFood.min, ROOM_RANGES.trapReward.spikeFood.max), "尖刺奖励");
                 } else {
-                    this.addDefenseMax(2);
+                    this.addDefenseMax(2, "尖刺奖励");
                 }
             }
             return { complete: true };
@@ -940,7 +941,7 @@ export class GameState {
         }
 
         if (Math.random() < ROOM_RANGES.trapCompensateRate) {
-            this.addXp(randomInt(1, 3));
+            this.addXp(randomInt(1, 3), "陷阱补偿");
             this.addLog("获得陷阱补偿");
         }
         return { complete: true };
@@ -967,27 +968,27 @@ export class GameState {
                 return { complete: false };
             }
 
-            this.addCoin(-item.cost);
+            this.addCoin(-item.cost, `购买 ${item.name}`);
             this.addLog(`购买: ${item.name}`);
             item.soldOut = true;
 
             if (item.id === "small_hp") {
-                this.addHp(5);
+                this.addHp(5, item.name);
             } else if (item.id === "large_hp") {
-                this.addHp(9);
+                this.addHp(9, item.name);
             } else if (item.id === "whetstone") {
                 this.snapshot.player.extraAtk += 1;
-                this.addLog("ATK Extra +1");
+                this.addLog(`${item.name}: ATK Extra +1`);
             } else if (item.id === "poor_armor") {
-                this.addDefense(randomInt(3, 6));
+                this.addDefense(randomInt(3, 6), item.name);
             } else if (item.id === "armor_shard") {
-                this.addDefenseMax(1);
+                this.addDefenseMax(1, item.name);
             } else if (item.id === "coin_bag") {
-                this.addCoin(randomInt(1, 5));
+                this.addCoin(randomInt(1, 5), item.name);
             } else if (item.id === "small_ration") {
-                this.addFood(2);
+                this.addFood(2, item.name);
             } else if (item.id === "large_ration") {
-                this.addFood(5);
+                this.addFood(5, item.name);
             } else if (item.id === "scroll") {
                 this.gainRandomScroll();
             }
@@ -999,8 +1000,8 @@ export class GameState {
                 this.addLog("无法出售护甲片");
                 return { complete: false };
             }
-            this.addDefenseMax(-1);
-            this.addCoin(5);
+            this.addDefenseMax(-1, "出售护甲片");
+            this.addCoin(5, "出售护甲片");
             this.addLog("完成: 出售护甲片");
             return { complete: false };
         }
@@ -1010,8 +1011,8 @@ export class GameState {
                 this.addLog("无法出售食物");
                 return { complete: false };
             }
-            this.addFood(-1);
-            this.addCoin(1);
+            this.addFood(-1, "出售食物");
+            this.addCoin(1, "出售食物");
             this.addLog("完成: 出售食物");
             return { complete: false };
         }
@@ -1022,7 +1023,7 @@ export class GameState {
                 return { complete: false };
             }
             this.snapshot.player.scroll = null;
-            this.addCoin(5);
+            this.addCoin(5, "出售卷轴");
             this.addLog("完成: 出售卷轴");
             return { complete: false };
         }
@@ -1064,17 +1065,17 @@ export class GameState {
 
     private resolveBonfireAction(actionId: string): RoomActionResult {
         if (actionId === "heal") {
-            this.addHp(randomInt(ROOM_RANGES.bonfire.heal.min, ROOM_RANGES.bonfire.heal.max));
+            this.addHp(randomInt(ROOM_RANGES.bonfire.heal.min, ROOM_RANGES.bonfire.heal.max), "篝火治疗");
             return { complete: true };
         }
         if (actionId === "cook") {
-            this.addFood(randomInt(ROOM_RANGES.bonfire.cook.min, ROOM_RANGES.bonfire.cook.max));
+            this.addFood(randomInt(ROOM_RANGES.bonfire.cook.min, ROOM_RANGES.bonfire.cook.max), "篝火烹饪");
             return { complete: true };
         }
         if (actionId === "polish") {
             const delta = this.randomFrom([-1, 1, 1, 2]);
             this.snapshot.player.extraAtk = Math.max(0, this.snapshot.player.extraAtk + delta);
-            this.addLog(`ATK Extra ${delta >= 0 ? "+" : ""}${delta}`);
+            this.addLog(`篝火打磨: ATK Extra ${delta >= 0 ? "+" : ""}${delta}`);
             return { complete: true };
         }
 
@@ -1087,10 +1088,10 @@ export class GameState {
         this.addLog(`篝火搜索触发 ${rolled.size} 个事件`);
 
         if (rolled.has("find_food")) {
-            this.addFood(randomInt(ROOM_RANGES.bonfire.foundFood.min, ROOM_RANGES.bonfire.foundFood.max));
+            this.addFood(randomInt(ROOM_RANGES.bonfire.foundFood.min, ROOM_RANGES.bonfire.foundFood.max), "篝火搜索(食物)");
         }
         if (rolled.has("find_coin")) {
-            this.addCoin(randomInt(ROOM_RANGES.bonfire.foundCoin.min, ROOM_RANGES.bonfire.foundCoin.max));
+            this.addCoin(randomInt(ROOM_RANGES.bonfire.foundCoin.min, ROOM_RANGES.bonfire.foundCoin.max), "篝火搜索(金币)");
         }
         if (rolled.has("weak_monster")) {
             return {
@@ -1114,10 +1115,10 @@ export class GameState {
                 this.addLog("金币不足，无法升级武器");
                 return { complete: false };
             }
-            this.addCoin(-4);
+            this.addCoin(-4, "铸锻升级武器");
             const delta = this.randomFrom([-1, 1, 1, 2]);
             this.snapshot.player.extraAtk = Math.max(0, this.snapshot.player.extraAtk + delta);
-            this.addLog(`锻造武器结果: ${delta >= 0 ? "+" : ""}${delta}`);
+            this.addLog(`铸锻升级武器: ATK Extra ${delta >= 0 ? "+" : ""}${delta}`);
             return { complete: true };
         }
 
@@ -1130,9 +1131,9 @@ export class GameState {
             return { complete: false };
         }
 
-        this.addCoin(-5);
-        this.addDefenseMax(1);
-        this.addDefense(1);
+        this.addCoin(-5, "铸锻锻造护甲");
+        this.addDefenseMax(1, "铸锻锻造护甲");
+        this.addDefense(1, "铸锻锻造护甲");
         return { complete: true };
     }
 
@@ -1146,9 +1147,9 @@ export class GameState {
                     ROOM_RANGES.statueOfferCoin.min,
                     Math.min(ROOM_RANGES.statueOfferCoin.max, this.snapshot.player.coin),
                 );
-                this.addCoin(-cost);
+                this.addCoin(-cost, "雕像供奉");
             } else if (this.snapshot.player.food > 0) {
-                this.addFood(-1);
+                this.addFood(-1, "雕像供奉");
             } else {
                 this.addLog("无可供奉资源");
                 return { complete: false };
@@ -1160,17 +1161,18 @@ export class GameState {
             const blessing = this.randomFrom(["hp", "def", "atk", "xp"]);
             this.addLog("获得祝福");
             if (blessing === "hp") {
-                this.addHp(randomInt(ROOM_RANGES.statueBless.hp.min, ROOM_RANGES.statueBless.hp.max));
+                this.addHp(randomInt(ROOM_RANGES.statueBless.hp.min, ROOM_RANGES.statueBless.hp.max), "雕像祝福");
             } else if (blessing === "def") {
-                this.addDefense(randomInt(ROOM_RANGES.statueBless.def.min, ROOM_RANGES.statueBless.def.max));
+                this.addDefense(randomInt(ROOM_RANGES.statueBless.def.min, ROOM_RANGES.statueBless.def.max), "雕像祝福");
             } else if (blessing === "atk") {
                 this.snapshot.player.extraAtk += 1;
-                this.addLog("ATK Extra +1");
+                this.addLog("雕像祝福: ATK Extra +1");
             } else {
                 this.addXp(
                     Math.random() < ROOM_RANGES.statueBless.xp.jackpotRate
                         ? ROOM_RANGES.statueBless.xp.jackpot
                         : randomInt(ROOM_RANGES.statueBless.xp.min, ROOM_RANGES.statueBless.xp.max),
+                    "雕像祝福",
                 );
             }
             return { complete: true };
@@ -1183,7 +1185,7 @@ export class GameState {
                 true,
             );
         } else {
-            this.addXp(-1);
+            this.addXp(-1, "雕像诅咒");
         }
         return { complete: true };
     }
@@ -1194,7 +1196,7 @@ export class GameState {
         }
 
         if (this.snapshot.player.food > 0) {
-            this.addFood(-1);
+            this.addFood(-1, "矿洞挖掘消耗");
         } else {
             if (this.snapshot.player.hp <= 1) {
                 this.addLog("生命过低，无法继续挖掘");
@@ -1214,19 +1216,19 @@ export class GameState {
         if (roll <= ROOM_RANGES.mine.rareOreRateUpper) {
             if (Math.random() < 0.5) {
                 this.snapshot.player.extraAtk += 1;
-                this.addLog("发现罕见矿石，ATK Extra +1");
+                this.addLog("矿洞稀有矿石: ATK Extra +1");
             } else {
-                this.addDefenseMax(2);
+                this.addDefenseMax(2, "矿洞稀有矿石");
             }
             return { complete: false };
         }
         if (roll <= ROOM_RANGES.mine.normalOreRateUpper) {
-            this.addCoin(randomInt(ROOM_RANGES.mine.normalCoin.min, ROOM_RANGES.mine.normalCoin.max));
+            this.addCoin(randomInt(ROOM_RANGES.mine.normalCoin.min, ROOM_RANGES.mine.normalCoin.max), "矿洞普通矿石");
             return { complete: false };
         }
         if (roll <= ROOM_RANGES.mine.plantRateUpper) {
-            this.addFood(randomInt(ROOM_RANGES.mine.plantFood.min, ROOM_RANGES.mine.plantFood.max));
-            this.addHp(randomInt(ROOM_RANGES.mine.plantHp.min, ROOM_RANGES.mine.plantHp.max));
+            this.addFood(randomInt(ROOM_RANGES.mine.plantFood.min, ROOM_RANGES.mine.plantFood.max), "矿洞植物");
+            this.addHp(randomInt(ROOM_RANGES.mine.plantHp.min, ROOM_RANGES.mine.plantHp.max), "矿洞植物");
             return { complete: false };
         }
         if (roll <= ROOM_RANGES.mine.larvaRateUpper) {
