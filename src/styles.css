@@ -194,9 +194,53 @@ button {
     transition: transform 120ms ease, box-shadow 120ms ease;
 }
 
-button:hover {
+button:not(:disabled):hover {
     transform: translateY(-1px);
     box-shadow: 0 4px 15px rgba(45, 212, 191, 0.35);
+}
+
+button:disabled {
+    border-color: rgba(136, 187, 202, 0.35);
+    background: linear-gradient(180deg, rgba(43, 56, 68, 0.85), rgba(27, 36, 45, 0.85));
+    color: rgba(206, 220, 232, 0.58);
+    cursor: not-allowed;
+    box-shadow: none;
+    transform: none;
+    filter: saturate(0.4);
+    pointer-events: none;
+}
+
+.actions button.btn-exit-fade {
+    animation: button-exit-fade 240ms ease forwards;
+}
+
+.actions button.btn-exit-fall {
+    transform-origin: center top;
+    animation: button-exit-fall 260ms cubic-bezier(0.2, 0.75, 0.35, 1) forwards;
+}
+
+@keyframes button-exit-fade {
+    0% {
+        opacity: 1;
+        filter: saturate(1);
+    }
+
+    100% {
+        opacity: 0;
+        filter: saturate(0.45);
+    }
+}
+
+@keyframes button-exit-fall {
+    0% {
+        opacity: 1;
+        transform: translateY(0) rotate(0deg);
+    }
+
+    100% {
+        opacity: 0;
+        transform: translateY(26px) rotate(18deg);
+    }
 }
 
 .stats-grid {
@@ -238,8 +282,16 @@ button:hover {
 
 .atk-bonus {
     font-weight: 800;
-    color: #ffd66f;
-    text-shadow: 0 2px 6px rgba(255, 214, 111, 0.7);
+    color: #fff08f;
+    text-shadow:
+        0 0 8px rgba(255, 240, 143, 0.95),
+        0 0 18px rgba(255, 201, 82, 0.85),
+        0 0 30px rgba(255, 150, 38, 0.62);
+}
+
+.atk-bonus-temp {
+    color: #8ff8ff;
+    text-shadow: 0 2px 7px rgba(143, 248, 255, 0.78);
 }
 
 .atk-line {
@@ -314,6 +366,12 @@ button:hover {
     background: rgba(136, 187, 202, 0.12);
 }
 
+.resource-hp .segment,
+.resource-shield .segment {
+    height: 14px;
+    border-radius: 4px;
+}
+
 .segment.on {
     background: linear-gradient(180deg, rgba(160, 255, 246, 0.88), rgba(72, 200, 184, 0.95));
     border-color: rgba(197, 255, 248, 0.8);
@@ -369,6 +427,62 @@ button:hover {
     border-color: rgba(231, 255, 194, 0.94);
 }
 
+.resource-progress {
+    border-color: rgba(124, 211, 246, 0.42);
+}
+
+.progress-composite {
+    margin-top: 6px;
+    display: grid;
+    gap: 6px;
+}
+
+.progress-row {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) 58px;
+    align-items: center;
+    gap: 6px;
+}
+
+.progress-tag,
+.progress-value {
+    font-size: 11px;
+    color: var(--muted);
+}
+
+.progress-value {
+    text-align: right;
+}
+
+.progress-segment-grid {
+    display: grid;
+    gap: 3px;
+}
+
+.progress-segment {
+    border-radius: 3px;
+    border: 1px solid rgba(124, 211, 246, 0.32);
+    background: rgba(124, 211, 246, 0.14);
+}
+
+.progress-row-thin .progress-segment {
+    height: 8px;
+}
+
+.progress-row-thick .progress-segment {
+    height: 12px;
+}
+
+.progress-segment-room.on {
+    background: linear-gradient(180deg, rgba(157, 234, 255, 0.95), rgba(60, 177, 213, 0.95));
+    border-color: rgba(207, 247, 255, 0.95);
+}
+
+.progress-segment-floor.on {
+    background: linear-gradient(180deg, rgba(167, 255, 216, 0.95), rgba(57, 192, 148, 0.95));
+    border-color: rgba(218, 255, 236, 0.95);
+}
+
 .resource-monster {
     border-color: rgba(255, 164, 122, 0.42);
 }
@@ -381,7 +495,7 @@ button:hover {
 
 .monster-row {
     display: grid;
-    grid-template-columns: 32px minmax(0, 1fr) 72px;
+    grid-template-columns: 32px minmax(0, 1fr) 58px;
     align-items: center;
     gap: 6px;
 }
@@ -424,7 +538,7 @@ button:hover {
 
 .xp-lane {
     display: grid;
-    grid-template-columns: 28px minmax(0, 1fr) 64px;
+    grid-template-columns: 28px minmax(0, 1fr) 58px;
     align-items: center;
     gap: 6px;
 }
@@ -494,13 +608,15 @@ button:hover {
 
 .resource.delta-up .segment.on,
 .resource.delta-up .icon-node.on,
-.resource.delta-up .xp-segment.on {
+.resource.delta-up .xp-segment.on,
+.resource.delta-up .progress-segment.on {
     animation: node-up 420ms ease;
 }
 
 .resource.delta-down .segment.on,
 .resource.delta-down .icon-node.on,
-.resource.delta-down .xp-segment.on {
+.resource.delta-down .xp-segment.on,
+.resource.delta-down .progress-segment.on {
     animation: node-down 420ms ease;
 }
 
@@ -699,6 +815,11 @@ button:hover {
 
     .segment {
         height: 9px;
+    }
+
+    .resource-hp .segment,
+    .resource-shield .segment {
+        height: 14px;
     }
 
     .log-box {

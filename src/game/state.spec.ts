@@ -144,7 +144,40 @@ describe("GameState combat actions", () => {
         expect(result.escaped).toBe(false);
         expect(result.playerDied).toBe(false);
         expect(state.snapshot.player.hp).toBe(20);
-        expect(state.snapshot.combat.frozenEnemyTurns).toBe(0);
+        expect(state.snapshot.combat.frozenEnemyTurns).toBe(1);
+        expect(state.snapshot.player.scroll).toBe(null);
+    });
+
+    it("skill does not end turn", () => {
+        const state = new GameState();
+        state.startCombat("测试怪", 30, 5, false);
+        state.snapshot.player.character = CHARS[4];
+        state.snapshot.player.hp = 20;
+        state.snapshot.player.defense = 0;
+
+        vi.spyOn(Math, "random").mockReturnValue(0.5);
+
+        const result = state.performCombatAction("skill");
+
+        expect(result.playerDied).toBe(false);
+        expect(result.victory).toBe(false);
+        expect(state.snapshot.player.hp).toBe(20);
+    });
+
+    it("fireball scroll does not end turn", () => {
+        const state = new GameState();
+        state.startCombat("测试怪", 100, 5, false);
+        state.snapshot.player.scroll = "火球术";
+        state.snapshot.player.hp = 20;
+        state.snapshot.player.defense = 0;
+
+        vi.spyOn(Math, "random").mockReturnValue(0.5);
+
+        const result = state.performCombatAction("scroll");
+
+        expect(result.playerDied).toBe(false);
+        expect(result.victory).toBe(false);
+        expect(state.snapshot.player.hp).toBe(20);
         expect(state.snapshot.player.scroll).toBe(null);
     });
 

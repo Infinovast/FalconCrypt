@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { GameCanvas } from "./components/GameCanvas";
-import { FLOOR, RESOURCE_THRESHOLD_RULES, ROOM_ADD, THRESHOLD_DISABLED, XP_MAX } from "./game/constants";
+import {
+    FLOOR,
+    MONSTER_SEGMENT_MAX,
+    RESOURCE_SEGMENT_MAX,
+    RESOURCE_THRESHOLD_RULES,
+    ROOM_ADD,
+    THRESHOLD_DISABLED,
+    XP_LEVEL_SEGMENT_MAX,
+    XP_MAX,
+    XP_PROGRESS_SEGMENT_MAX,
+} from "./game/constants";
 import { gameState } from "./game/state";
 import type { CharacterTuple, CombatActionType } from "./game/types";
 import type { ThresholdRule } from "./game/constants";
@@ -13,6 +23,7 @@ type SegmentedResourceProps = {
     label: string;
     value: number;
     max: number;
+    segments?: number;
     tone?: "hp" | "shield" | "enemy";
     threshold: ThresholdRule;
 };
@@ -23,6 +34,7 @@ type IconStripResourceProps = {
     value: number;
     unit: number;
     maxValue?: number;
+    segments?: number;
     tone?: "coin" | "path" | "food";
     threshold: ThresholdRule;
 };
@@ -101,6 +113,11 @@ const classifyLog = (line: string): LogCategory => {
     return "system";
 };
 
+const calcScaledSegments = (cap: number, maxSegments = RESOURCE_SEGMENT_MAX): number => {
+    const safeCap = Math.max(1, cap);
+    return Math.min(maxSegments, Math.max(1, Math.ceil(safeCap)));
+};
+
 const buildLogBuckets = (logs: string[]): Record<LogCategory, CategorizedLog[]> => {
     const initial: Record<LogCategory, CategorizedLog[]> = {
         room: [],
@@ -136,6 +153,11 @@ const calcLevelClass = (ratio: number, threshold: ThresholdRule): string => {
     return "is-safe";
 };
 
+const DISABLED_THRESHOLD_RULE: ThresholdRule = {
+    warning: THRESHOLD_DISABLED,
+    critical: THRESHOLD_DISABLED,
+};
+
 function useDeltaClass(value: number): "" | "delta-up" | "delta-down" {
     const prevRef = useRef(value);
     const [deltaClass, setDeltaClass] = useState<"" | "delta-up" | "delta-down">("");
@@ -151,12 +173,12 @@ function useDeltaClass(value: number): "" | "delta-up" | "delta-down" {
     return deltaClass;
 }
 
-function SegmentedResource({ icon, label, value, max, tone = "hp", threshold }: SegmentedResourceProps): JSX.Element {
+function SegmentedResource({ icon, label, value, max, segments, tone = "hp", threshold }: SegmentedResourceProps): JSX.Element {
     const safeMax = Math.max(1, max);
     const clampedValue = Math.max(0, Math.min(value, safeMax));
     const fillRatio = clampedValue / safeMax;
-    const segments = Math.min(20, Math.max(10, safeMax));
-    const filledCount = Math.round(fillRatio * segments);
+    const segmentCount = Math.min(RESOURCE_SEGMENT_MAX, Math.max(1, Math.floor(segments ?? safeMax)));
+    const filledCount = Math.round(fillRatio * segmentCount);
     const levelClass = calcLevelClass(fillRatio, threshold);
     const deltaClass = useDeltaClass(value);
 
@@ -173,8 +195,13 @@ function SegmentedResource({ icon, label, value, max, tone = "hp", threshold }: 
                     {Math.max(0, value)}/{safeMax}
                 </strong>
             </div>
-            <div className="segment-bar" role="img" aria-label={`${label} ${Math.max(0, value)} / ${safeMax}`}>
-                {Array.from({ length: segments }, (_, idx) => (
+            <div
+                className="segment-bar"
+                role="img"
+                aria-label={`${label} ${Math.max(0, value)} / ${safeMax}`}
+                style={{ gridTemplateColumns: `repeat(${segmentCount}, minmax(0, 1fr))` }}
+            >
+                {Array.from({ length: segmentCount }, (_, idx) => (
                     <span key={`${label}-${idx}`} className={idx < filledCount ? "segment on" : "segment"} />
                 ))}
             </div>
@@ -182,10 +209,10 @@ function SegmentedResource({ icon, label, value, max, tone = "hp", threshold }: 
     );
 }
 
-function IconStripResource({ icon, label, value, unit, maxValue, tone = "path", threshold }: IconStripResourceProps): JSX.Element {
+function IconStripResource({ icon, label, value, unit, maxValue, segments, tone = "path", threshold }: IconStripResourceProps): JSX.Element {
     const safeUnit = Math.max(1, unit);
     const safeMax = Math.max(1, maxValue ?? value);
-    const maxUnits = Math.min(20, Math.max(6, Math.ceil(safeMax / safeUnit)));
+    const maxUnits = Math.min(RESOURCE_SEGMENT_MAX, Math.max(1, Math.ceil(segments ?? safeMax / safeUnit)));
     const ratio = Math.max(0, Math.min(value, safeMax)) / safeMax;
     const capped = Math.round(ratio * maxUnits);
     const levelClass = calcLevelClass(ratio, threshold);
@@ -226,15 +253,22 @@ type MonsterCompositeResourceProps = {
     atkMax: number;
 };
 
+type ProgressCompositeResourceProps = {
+    room: number;
+    roomMax: number;
+    floor: number;
+    floorMax: number;
+};
+
 function XpCompositeResource({ xp, xpMax, xpLevel }: XpCompositeResourceProps): JSX.Element {
     const safeXpMax = Math.max(1, xpMax);
     const safeXp = Math.max(0, Math.min(xp, safeXpMax));
     const xpRatio = safeXp / safeXpMax;
 
     const safeLevel = Math.max(1, xpLevel);
-    const levelScaleMax = 5;
+    const levelScaleMax = XP_LEVEL_SEGMENT_MAX;
     const levelRatio = Math.max(0, Math.min(safeLevel, levelScaleMax)) / levelScaleMax;
-    const xpSegments = 14;
+    const xpSegments = XP_PROGRESS_SEGMENT_MAX;
     const levelSegments = levelScaleMax;
     const xpFilled = Math.round(xpRatio * xpSegments);
     const levelFilled = Math.round(levelRatio * levelSegments);
@@ -286,7 +320,7 @@ function MonsterCompositeResource({ hp, hpMax, atk, atkMax }: MonsterCompositeRe
     const safeAtkMax = Math.max(1, atkMax);
     const clampedHp = Math.max(0, Math.min(hp, safeHpMax));
     const clampedAtk = Math.max(0, Math.min(atk, safeAtkMax));
-    const segments = 14;
+    const segments = MONSTER_SEGMENT_MAX;
     const hpFilled = Math.round((clampedHp / safeHpMax) * segments);
     const atkFilled = Math.round((clampedAtk / safeAtkMax) * segments);
 
@@ -338,6 +372,66 @@ function MonsterCompositeResource({ hp, hpMax, atk, atkMax }: MonsterCompositeRe
     );
 }
 
+function ProgressCompositeResource({ room, roomMax, floor, floorMax }: ProgressCompositeResourceProps): JSX.Element {
+    const safeRoomMax = Math.max(1, roomMax);
+    const safeFloorMax = Math.max(1, floorMax);
+    const clampedRoom = Math.max(0, Math.min(room, safeRoomMax));
+    const clampedFloor = Math.max(0, Math.min(floor, safeFloorMax));
+
+    const roomSegments = safeRoomMax;
+    const floorSegments = safeFloorMax;
+    const roomFilled = Math.round((clampedRoom / safeRoomMax) * roomSegments);
+    const floorFilled = Math.round((clampedFloor / safeFloorMax) * floorSegments);
+
+    const roomDelta = useDeltaClass(room);
+    const floorDelta = useDeltaClass(floor);
+    const deltaClass = roomDelta === "delta-down" || floorDelta === "delta-down" ? "delta-down" : roomDelta || floorDelta;
+
+    return (
+        <div className={`resource resource-progress ${deltaClass}`}>
+            <div className="resource-head">
+                <span className="resource-label">
+                    <span className="resource-icon" aria-hidden="true">
+                        🧭
+                    </span>
+                    进度
+                </span>
+            </div>
+            <div className="progress-composite" role="img" aria-label={`房间 ${clampedRoom} / ${safeRoomMax}，层数 ${clampedFloor} / ${safeFloorMax}`}>
+                <div className="progress-row progress-row-thin">
+                    <span className="progress-tag">房间</span>
+                    <div className="progress-segment-grid" style={{ gridTemplateColumns: `repeat(${roomSegments}, minmax(0, 1fr))` }}>
+                        {Array.from({ length: roomSegments }, (_, idx) => (
+                            <span
+                                key={`progress-room-${idx}`}
+                                className={idx < roomFilled ? "progress-segment progress-segment-room on" : "progress-segment progress-segment-room"}
+                            />
+                        ))}
+                    </div>
+                    <span className="progress-value">
+                        {clampedRoom}/{safeRoomMax}
+                    </span>
+                </div>
+
+                <div className="progress-row progress-row-thick">
+                    <span className="progress-tag">层数</span>
+                    <div className="progress-segment-grid" style={{ gridTemplateColumns: `repeat(${floorSegments}, minmax(0, 1fr))` }}>
+                        {Array.from({ length: floorSegments }, (_, idx) => (
+                            <span
+                                key={`progress-floor-${idx}`}
+                                className={idx < floorFilled ? "progress-segment progress-segment-floor on" : "progress-segment progress-segment-floor"}
+                            />
+                        ))}
+                    </div>
+                    <span className="progress-value">
+                        {clampedFloor}/{safeFloorMax}
+                    </span>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 export function App(): JSX.Element {
     const [stage, setStage] = useState<Stage>("menu");
     const [tick, setTick] = useState(0);
@@ -345,16 +439,45 @@ export function App(): JSX.Element {
     const [hoveredChar, setHoveredChar] = useState<CharacterTuple | null>(null);
     const [activeEvent, setActiveEvent] = useState<RoomEventType | null>(null);
     const [activeRoomKey, setActiveRoomKey] = useState<string | null>(null);
+    const [buttonsAnimating, setButtonsAnimating] = useState(false);
+    const hpPeakRef = useRef(1);
+    const foodPeakRef = useRef(1);
+    const coinPeakRef = useRef(1);
+    const actionsRef = useRef<HTMLDivElement | null>(null);
+    const actionAnimTimerRef = useRef<number | null>(null);
 
     const snapshot = gameState.snapshot;
     const previewChar = stage === "character" ? hoveredChar : null;
     const displayCharacter = previewChar ?? snapshot.player.character;
     const displayHp = previewChar ? previewChar[1] : snapshot.player.hp;
-    const displayDefenseMax = previewChar ? previewChar[3] : snapshot.player.defenseMax;
     const displayDefense = previewChar ? previewChar[3] : snapshot.player.defense;
     const displayFood = previewChar ? previewChar[4] : snapshot.player.food;
     const displayCoin = previewChar ? previewChar[2] : snapshot.player.coin;
-    const displayExtraAtk = previewChar ? previewChar[5] : snapshot.player.extraAtk;
+    const combatTempExtraAtk = !previewChar && stage === "combat" ? snapshot.combat.tempExtraAtk : 0;
+    const displayExtraAtk = previewChar ? previewChar[5] : snapshot.player.extraAtk + combatTempExtraAtk;
+    const hasTempExtraAtkInDisplay =
+        !previewChar &&
+        stage === "combat" &&
+        snapshot.combat.tempExtraAtk !== 0 &&
+        displayExtraAtk > 0;
+
+    useEffect(() => {
+        if (stage === "character") return;
+        hpPeakRef.current = Math.max(hpPeakRef.current, snapshot.player.hp);
+        foodPeakRef.current = Math.max(foodPeakRef.current, snapshot.player.food);
+        coinPeakRef.current = Math.max(coinPeakRef.current, snapshot.player.coin);
+    }, [snapshot.player.hp, snapshot.player.food, snapshot.player.coin, stage]);
+
+    const hpHistoryCap = previewChar ? Math.max(1, previewChar[1]) : Math.max(1, hpPeakRef.current, snapshot.player.hp);
+    const defHistoryCap = previewChar ? Math.max(1, previewChar[3]) : Math.max(1, snapshot.player.defenseMax);
+    const foodHistoryCap = previewChar ? Math.max(1, previewChar[4]) : Math.max(1, foodPeakRef.current, snapshot.player.food);
+    const coinHistoryCap = previewChar ? Math.max(1, previewChar[2]) : Math.max(1, coinPeakRef.current, snapshot.player.coin);
+
+    const hpSegments = calcScaledSegments(hpHistoryCap);
+    const defSegments = calcScaledSegments(defHistoryCap);
+    const foodSegments = calcScaledSegments(foodHistoryCap);
+    const coinSegments = calcScaledSegments(coinHistoryCap);
+
     const pendingScroll = snapshot.player.pendingScroll;
     const displayScroll = previewChar
         ? previewChar[0] === "盗贼"
@@ -364,9 +487,9 @@ export function App(): JSX.Element {
             ? `${snapshot.player.scroll ?? "-"} (待替换 ${pendingScroll})`
             : snapshot.player.scroll ?? "-";
     const dangerLevel = useMemo(() => Math.min(5, snapshot.dungeon.floor), [snapshot.dungeon.floor, tick]);
-    const playerHpMax = Math.max(displayCharacter?.[1] ?? 1, displayHp, 1);
-    const defenseMax = Math.max(1, displayDefenseMax);
-    const foodMax = Math.max(displayCharacter?.[4] ?? 1, displayFood, 1);
+    const playerHpMax = hpHistoryCap;
+    const defenseMax = defHistoryCap;
+    const foodMax = foodHistoryCap;
     const atkMin = snapshot.player.xpLevel;
     const atkMax = 2 * snapshot.player.xpLevel + 4;
     const monsterMax = snapshot.combat.monsterName
@@ -375,7 +498,7 @@ export function App(): JSX.Element {
     const monsterAtkMax = snapshot.combat.monsterName
         ? Math.max(snapshot.dungeon.floor + 6, snapshot.combat.monsterAtk, 1)
         : 1;
-    const coinMax = Math.max(20, displayCoin, 1);
+    const coinMax = coinHistoryCap;
     const floorMax = Math.max(FLOOR, snapshot.dungeon.floor, 1);
     const currentFloorRoomCount = snapshot.dungeon.floor + ROOM_ADD;
     const roomMax = Math.max(snapshot.dungeon.floor + ROOM_ADD, snapshot.dungeon.roomIdx, 1);
@@ -391,8 +514,60 @@ export function App(): JSX.Element {
     const nextFloorMap = gameState.getMapRoomsForFloor(nextFloor, showFullMap);
     const shopInventory = stage === "event" && activeEvent === "shop_event" ? gameState.getShopInventoryView() : null;
     const logBuckets = buildLogBuckets(snapshot.logs.slice(-48));
+    const thresholdRule = (rule: ThresholdRule): ThresholdRule => (stage === "menu" ? DISABLED_THRESHOLD_RULE : rule);
 
     const refresh = () => setTick((v) => v + 1);
+
+    useEffect(() => {
+        return () => {
+            if (actionAnimTimerRef.current !== null) {
+                window.clearTimeout(actionAnimTimerRef.current);
+                actionAnimTimerRef.current = null;
+            }
+        };
+    }, []);
+
+    const runActionWithButtonAnimation = (clickedActionId: string, action: () => void) => {
+        if (buttonsAnimating) return;
+
+        const root = actionsRef.current;
+        const allButtons = root ? Array.from(root.querySelectorAll<HTMLButtonElement>("button")) : [];
+        if (allButtons.length === 0) {
+            action();
+            return;
+        }
+
+        setButtonsAnimating(true);
+        allButtons.forEach((btn) => {
+            const isClicked = btn.dataset.actionId === clickedActionId;
+            if (btn.disabled || isClicked) {
+                btn.classList.add("btn-exit-fade");
+            } else {
+                btn.classList.add("btn-exit-fall");
+            }
+        });
+
+        actionAnimTimerRef.current = window.setTimeout(() => {
+            action();
+            setButtonsAnimating(false);
+            window.requestAnimationFrame(() => {
+                const latestButtons = actionsRef.current ? Array.from(actionsRef.current.querySelectorAll<HTMLButtonElement>("button")) : [];
+                latestButtons.forEach((btn) => {
+                    btn.classList.remove("btn-exit-fade", "btn-exit-fall");
+                });
+            });
+            actionAnimTimerRef.current = null;
+        }, 260);
+    };
+
+    const triggerAction = (actionId: string, action: () => void, withExitAnimation = true) => {
+        if (withExitAnimation) {
+            runActionWithButtonAnimation(actionId, action);
+            return;
+        }
+        if (buttonsAnimating) return;
+        action();
+    };
 
     const finalizeRoomFlow = () => {
         if (!activeRoomKey) {
@@ -430,6 +605,9 @@ export function App(): JSX.Element {
         gameState.reset();
         setCharOptions(gameState.getCharacterOptions());
         gameState.addLog("提示：鼠标悬停在角色按钮上可预览角色信息");
+        hpPeakRef.current = 1;
+        foodPeakRef.current = 1;
+        coinPeakRef.current = 1;
         setHoveredChar(null);
         setActiveEvent(null);
         setActiveRoomKey(null);
@@ -438,6 +616,12 @@ export function App(): JSX.Element {
     };
 
     const confirmCharacter = (index: number) => {
+        const selected = charOptions[index];
+        if (selected) {
+            hpPeakRef.current = Math.max(1, selected[1]);
+            foodPeakRef.current = Math.max(1, selected[4]);
+            coinPeakRef.current = Math.max(1, selected[2]);
+        }
         gameState.pickCharacter(index);
         setHoveredChar(null);
         setActiveEvent(null);
@@ -493,7 +677,9 @@ export function App(): JSX.Element {
     };
 
     const handleCombatAction = (actionType: CombatActionType) => {
-        gameState.clearCombatLogs();
+        if (actionType === "attack" || actionType === "critical") {
+            gameState.clearCombatLogs();
+        }
         const result = gameState.performCombatAction(actionType);
 
         if (result.victory) {
@@ -585,20 +771,29 @@ export function App(): JSX.Element {
                         </section>
                     ))}
                 </div>
-                <div className="actions">
+                <div className="actions" ref={actionsRef}>
                     {pendingScroll ? (
                         <>
-                            <button onClick={() => resolvePendingScroll(true)}>替换为 {pendingScroll}</button>
-                            <button onClick={() => resolvePendingScroll(false)}>保留当前卷轴</button>
+                            <button data-action-id="pending-scroll-accept" onClick={() => triggerAction("pending-scroll-accept", () => resolvePendingScroll(true))}>
+                                替换为 {pendingScroll}
+                            </button>
+                            <button data-action-id="pending-scroll-keep" onClick={() => triggerAction("pending-scroll-keep", () => resolvePendingScroll(false))}>
+                                保留当前卷轴
+                            </button>
                         </>
                     ) : (
                         <>
-                            {stage === "menu" && <button onClick={startNewRun}>开始冒险</button>}
+                            {stage === "menu" && (
+                                <button data-action-id="start-new-run" onClick={() => triggerAction("start-new-run", startNewRun)}>
+                                    开始冒险
+                                </button>
+                            )}
                             {stage === "character" &&
                                 charOptions.map((c, i) => (
                                     <button
                                         key={c[0]}
-                                        onClick={() => confirmCharacter(i)}
+                                        data-action-id={`character-${i}`}
+                                        onClick={() => triggerAction(`character-${i}`, () => confirmCharacter(i))}
                                         onMouseEnter={() => setHoveredChar(c)}
                                         onMouseLeave={() => setHoveredChar(null)}
                                         onFocus={() => setHoveredChar(c)}
@@ -607,7 +802,11 @@ export function App(): JSX.Element {
                                         选择 {c[0]} / {c[6]}
                                     </button>
                                 ))}
-                            {stage === "explore" && <button onClick={enterRoom}>{exploreEnterLabel}</button>}
+                            {stage === "explore" && (
+                                <button data-action-id="enter-room" onClick={() => triggerAction("enter-room", enterRoom)}>
+                                    {exploreEnterLabel}
+                                </button>
+                            )}
                             {stage === "event" &&
                                 activeEvent &&
                                 (activeEvent === "shop_event" && shopInventory ? (
@@ -618,7 +817,8 @@ export function App(): JSX.Element {
                                                 {shopInventory.buy.map((action) => (
                                                     <button
                                                         key={action.id}
-                                                        onClick={() => executeRoomAction(action.id)}
+                                                        data-action-id={action.id}
+                                                        onClick={() => triggerAction(action.id, () => executeRoomAction(action.id), false)}
                                                         disabled={Boolean(action.disabledReason)}
                                                         title={action.disabledReason}
                                                     >
@@ -633,7 +833,8 @@ export function App(): JSX.Element {
                                                 {shopInventory.sell.map((action) => (
                                                     <button
                                                         key={action.id}
-                                                        onClick={() => executeRoomAction(action.id)}
+                                                        data-action-id={action.id}
+                                                        onClick={() => triggerAction(action.id, () => executeRoomAction(action.id), false)}
                                                         disabled={Boolean(action.disabledReason)}
                                                         title={action.disabledReason}
                                                     >
@@ -642,7 +843,9 @@ export function App(): JSX.Element {
                                                 ))}
                                             </div>
                                         </div>
-                                        <button onClick={() => executeRoomAction("leave")}>离开商人</button>
+                                        <button data-action-id="shop-leave" onClick={() => triggerAction("shop-leave", () => executeRoomAction("leave"))}>
+                                            离开商人
+                                        </button>
                                     </div>
                                 ) : (
                                     <>
@@ -652,7 +855,8 @@ export function App(): JSX.Element {
                                         {gameState.getRoomActions(activeEvent).map((action) => (
                                             <button
                                                 key={action.id}
-                                                onClick={() => executeRoomAction(action.id)}
+                                                data-action-id={action.id}
+                                                onClick={() => triggerAction(action.id, () => executeRoomAction(action.id))}
                                                 disabled={Boolean(action.disabledReason)}
                                                 title={action.disabledReason}
                                             >
@@ -665,7 +869,8 @@ export function App(): JSX.Element {
                                 gameState.getCombatActions().map((action) => (
                                     <button
                                         key={action.id}
-                                        onClick={() => handleCombatAction(action.id as CombatActionType)}
+                                        data-action-id={action.id}
+                                        onClick={() => triggerAction(action.id, () => handleCombatAction(action.id as CombatActionType), false)}
                                         disabled={Boolean(action.disabledReason)}
                                         title={action.disabledReason}
                                     >
@@ -706,7 +911,11 @@ export function App(): JSX.Element {
                         <span>攻击</span>
                         <strong className="atk-line">
                             <span className="atk-main">[{atkMin}~{atkMax}]</span>
-                            {displayExtraAtk > 0 ? <span className="atk-bonus">+{displayExtraAtk}</span> : ""}
+                            {displayExtraAtk > 0 ? (
+                                <span className={`atk-bonus ${hasTempExtraAtkInDisplay ? "atk-bonus-temp" : ""}`}>+{displayExtraAtk}</span>
+                            ) : (
+                                ""
+                            )}
                         </strong>
                     </div>
                 </div>
@@ -717,61 +926,18 @@ export function App(): JSX.Element {
                         label="生命"
                         value={displayHp}
                         max={playerHpMax}
+                        segments={hpSegments}
                         tone="hp"
-                        threshold={RESOURCE_THRESHOLD_RULES.hp}
+                        threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.hp)}
                     />
                     <SegmentedResource
                         icon="🛡"
-                        label="防御"
+                        label="护甲"
                         value={displayDefense}
                         max={defenseMax}
+                        segments={defSegments}
                         tone="shield"
-                        threshold={RESOURCE_THRESHOLD_RULES.shield}
-                    />
-                    <IconStripResource
-                        icon="🍖"
-                        label="食物"
-                        value={displayFood}
-                        unit={1}
-                        maxValue={foodMax}
-                        tone="food"
-                        threshold={RESOURCE_THRESHOLD_RULES.food}
-                    />
-                    <XpCompositeResource xp={snapshot.player.xp} xpMax={XP_MAX} xpLevel={snapshot.player.xpLevel} />
-                    {stage === "combat" && (
-                        <MonsterCompositeResource
-                            hp={snapshot.combat.monsterHp || 0}
-                            hpMax={monsterMax}
-                            atk={snapshot.combat.monsterAtk || 0}
-                            atkMax={monsterAtkMax}
-                        />
-                    )}
-                    <IconStripResource
-                        icon="🪙"
-                        label="金币"
-                        value={displayCoin}
-                        unit={2}
-                        maxValue={coinMax}
-                        tone="coin"
-                        threshold={RESOURCE_THRESHOLD_RULES.coin}
-                    />
-                    <IconStripResource
-                        icon="🗺"
-                        label="层数"
-                        value={snapshot.dungeon.floor}
-                        unit={1}
-                        maxValue={floorMax}
-                        tone="path"
-                        threshold={RESOURCE_THRESHOLD_RULES.path}
-                    />
-                    <IconStripResource
-                        icon="🚪"
-                        label="房间"
-                        value={snapshot.dungeon.roomIdx}
-                        unit={1}
-                        maxValue={roomMax}
-                        tone="path"
-                        threshold={RESOURCE_THRESHOLD_RULES.path}
+                        threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.shield)}
                     />
                     {stage === "combat" && (
                         <IconStripResource
@@ -781,9 +947,39 @@ export function App(): JSX.Element {
                             unit={1}
                             maxValue={12}
                             tone="path"
-                            threshold={RESOURCE_THRESHOLD_RULES.path}
+                            threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.path)}
                         />
                     )}
+                    <IconStripResource
+                        icon="🍖"
+                        label="食物"
+                        value={displayFood}
+                        unit={1}
+                        maxValue={foodMax}
+                        segments={foodSegments}
+                        tone="food"
+                        threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.food)}
+                    />
+                    <IconStripResource
+                        icon="🪙"
+                        label="金币"
+                        value={displayCoin}
+                        unit={1}
+                        maxValue={coinMax}
+                        segments={coinSegments}
+                        tone="coin"
+                        threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.coin)}
+                    />
+                    {stage === "combat" && (
+                        <MonsterCompositeResource
+                            hp={snapshot.combat.monsterHp || 0}
+                            hpMax={monsterMax}
+                            atk={snapshot.combat.monsterAtk || 0}
+                            atkMax={monsterAtkMax}
+                        />
+                    )}
+                    <XpCompositeResource xp={snapshot.player.xp} xpMax={XP_MAX} xpLevel={snapshot.player.xpLevel} />
+                    <ProgressCompositeResource room={snapshot.dungeon.roomIdx} roomMax={roomMax} floor={snapshot.dungeon.floor} floorMax={floorMax} />
                 </div>
 
                 <header className="panel-title mt">战斗动画</header>

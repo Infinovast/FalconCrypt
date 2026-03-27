@@ -4,7 +4,11 @@ export const FLOOR = 4;
 export const ROOM_ADD = 3;
 export const XP_MAX = 8;
 export const SKILL_POINT_MAX = 12;
-export const NEXT_ROOM_REVEAL_RATE = 0.2;
+export const RESOURCE_SEGMENT_MAX = 30;
+export const XP_PROGRESS_SEGMENT_MAX = 14;
+export const XP_LEVEL_SEGMENT_MAX = 5;
+export const MONSTER_SEGMENT_MAX = 14;
+export const NEXT_ROOM_REVEAL_RATE = 0.3;
 export const NEXT_FLOOR_REVEAL_RATE = 0.1;
 export const BRANCH_REORDER_SUCCESS_RATE = 0.5;
 
@@ -27,11 +31,11 @@ export const RESOURCE_THRESHOLD_RULES: Record<ResourceThresholdKey, ThresholdRul
 };
 
 export const CHARS: CharacterTuple[] = [
-    ["术士", 21, 8, 1, 9, 0, "神算"],
-    ["圣骑士", 19, 5, 4, 8, 1, "净化"],
-    ["盗贼", 20, 13, 1, 8, 0, "卷轴"],
-    ["祭司", 26, 7, 1, 8, 0, "血祭"],
-    ["刺客", 18, 4, 1, 7, 2, "挑衅"],
+    ["术士", 25, 8, 1, 9, 0, "神算"],
+    ["圣骑士", 23, 5, 4, 8, 1, "净化"],
+    ["盗贼", 24, 13, 1, 8, 0, "卷轴"],
+    ["祭司", 30, 7, 1, 8, 0, "血祭"],
+    ["刺客", 22, 4, 1, 7, 2, "挑衅"],
 ];
 
 export const ROOMS: RoomTuple[] = [

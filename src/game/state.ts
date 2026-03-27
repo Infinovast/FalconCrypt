@@ -548,30 +548,29 @@ export class GameState {
 
     performCombatAction(actionType: CombatActionType): CombatActionResult {
         const result: CombatActionResult = { playerDied: false, victory: false, escaped: false };
-        let spentTurn = false;
+        let endTurn = false;
 
         if (actionType === "attack") {
             this.playerAttack();
-            spentTurn = true;
+            endTurn = true;
         } else if (actionType === "critical") {
-            spentTurn = this.useCritical();
+            endTurn = this.useCritical();
         } else if (actionType === "skill") {
-            spentTurn = this.useRoleSkill();
+            this.useRoleSkill();
         } else if (actionType === "scroll") {
             const scrollResult = this.useScrollInCombat();
-            spentTurn = scrollResult.spent;
             if (scrollResult.escaped) {
                 result.escaped = true;
                 return result;
             }
         }
 
-        if (!spentTurn) return result;
-
         if (this.snapshot.combat.monsterHp <= 0) {
             result.victory = true;
             return result;
         }
+
+        if (!endTurn) return result;
 
         if (this.snapshot.combat.frozenEnemyTurns > 0) {
             this.snapshot.combat.frozenEnemyTurns -= 1;
@@ -622,23 +621,23 @@ export class GameState {
             const gained = Math.floor(this.snapshot.player.xp / XP_MAX);
             this.snapshot.player.xp %= XP_MAX;
             this.snapshot.player.xpLevel += gained;
-            this.addLog(`升级 +${gained}`);
+            this.addLog(`升级 XP Level +${gained}`);
         }
 
         if (this.snapshot.player.food > 0) {
             this.snapshot.player.food -= 1;
             const heal = randomInt(ROOM_RANGES.roomConsequence.healMin, this.snapshot.dungeon.floor + 2);
             this.snapshot.player.hp += heal;
-            this.addLog(`食物恢复 +${heal}`);
+            this.addLog(`食物恢复 HP +${heal}`);
         } else {
             const loss = randomInt(ROOM_RANGES.roomConsequence.hungerLossMin, this.snapshot.dungeon.floor + 2);
             this.snapshot.player.hp = Math.max(0, this.snapshot.player.hp - loss);
-            this.addLog(`饥饿损失 -${loss}`);
+            this.addLog(`饥饿损失 HP -${loss}`);
         }
 
         if (this.snapshot.player.defense < this.snapshot.player.defenseMax) {
             this.snapshot.player.defense = Math.min(this.snapshot.player.defenseMax, this.snapshot.player.defense + 1);
-            this.addLog("防御自然恢复 +1");
+            this.addLog("护甲自然恢复 Def +1");
         }
     }
 
