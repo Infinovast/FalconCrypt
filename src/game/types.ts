@@ -34,6 +34,7 @@ export interface RoomNode {
     eventType: RoomEventType;
     revealed: boolean;
     branches?: RoomTuple[];
+    revealedBranchIndexes?: number[];
     chosenBranchName?: string;
     chosenBranchEventType?: RoomEventType;
     reorderedByBranch?: boolean;

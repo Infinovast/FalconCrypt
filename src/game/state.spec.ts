@@ -22,6 +22,76 @@ describe("GameState map generation", () => {
             expect(boss.revealed).toBe(true);
         });
     });
+
+    it("never generates two consecutive same room types on a floor", () => {
+        const state = new GameState();
+        state.generateMap();
+
+        const expectedRoomCounts = [4, 5, 6, 7];
+        expectedRoomCounts.forEach((count, floorIdx) => {
+            const floor = floorIdx + 1;
+            for (let idx = 2; idx <= count; idx += 1) {
+                const prev = state.snapshot.dungeon.map[`${floor}-${idx - 1}`];
+                const curr = state.snapshot.dungeon.map[`${floor}-${idx}`];
+                expect(curr.eventType).not.toBe(prev.eventType);
+            }
+        });
+    });
+
+    it("never generates duplicate options inside a branch room", () => {
+        const state = new GameState();
+        state.generateMap();
+
+        Object.values(state.snapshot.dungeon.map).forEach((room) => {
+            if (room.eventType !== "branch_event" || !room.branches) return;
+            const branchEventTypes = room.branches.map((branch) => branch[1]);
+            expect(new Set(branchEventTypes).size).toBe(branchEventTypes.length);
+        });
+    });
+
+    it("keeps 2/3 options when a branch room is revealed by scouting", () => {
+        const state = new GameState();
+        state.snapshot.dungeon.floor = 1;
+        state.snapshot.dungeon.roomIdx = 1;
+        state.snapshot.dungeon.map = {
+            "1-1": {
+                key: "1-1",
+                floor: 1,
+                index: 1,
+                name: "怪物",
+                eventType: "monster_event",
+                revealed: true,
+            },
+            "1-2": {
+                key: "1-2",
+                floor: 1,
+                index: 2,
+                name: "分叉口",
+                eventType: "branch_event",
+                branches: [
+                    ["篝火", "bonfire_event"],
+                    ["宝箱", "chest_event"],
+                    ["雕像", "statue_event"],
+                ],
+                revealed: false,
+            },
+        };
+
+        vi.spyOn(Math, "random").mockReturnValue(0);
+
+        state.getCurrentRoomEvent();
+
+        expect(state.snapshot.dungeon.map["1-2"].revealed).toBe(true);
+        expect(state.snapshot.dungeon.map["1-2"].branches?.length).toBe(3);
+
+        state.snapshot.dungeon.roomIdx = 2;
+        const branchActions = state.getRoomActions("branch_event").filter((action) => action.id.startsWith("branch_"));
+        const revealedLabels = branchActions.filter((action) => !action.label.endsWith("?")).length;
+        const hiddenLabels = branchActions.filter((action) => action.label.endsWith("?")).length;
+
+        expect(revealedLabels).toBe(1);
+        expect(hiddenLabels).toBe(2);
+    });
 });
 
 describe("GameState shop inventory", () => {
@@ -260,6 +330,42 @@ describe("GameState combat actions", () => {
 
         expect(state.snapshot.combat.monsterName).toBe(BOSS_BY_FLOOR[2]);
         expect(state.snapshot.combat.isBoss).toBe(true);
+    });
+
+    it("grants random xp reward after combat based on floor range", () => {
+        const state = new GameState();
+        state.snapshot.dungeon.floor = 3;
+        state.snapshot.player.hp = 20;
+
+        vi.spyOn(Math, "random").mockReturnValue(0);
+
+        state.startCombat("测试怪", 20, 3, false);
+        state.finishCombat(true);
+
+        expect(state.snapshot.player.xp).toBe(3);
+    });
+
+    it("does not grant post-combat xp reward when player is dead", () => {
+        const state = new GameState();
+        state.snapshot.dungeon.floor = 3;
+        state.snapshot.player.hp = 0;
+
+        state.startCombat("测试怪", 20, 3, false);
+        state.finishCombat(false);
+
+        expect(state.snapshot.player.xp).toBe(0);
+    });
+
+    it("queued bonus chest always has at least one reward", () => {
+        const state = new GameState();
+        vi.spyOn(Math, "random").mockReturnValue(0);
+
+        state.queueBonusChest(1);
+        const result = state.resolveRoomAction("chest_event", "open");
+
+        expect(result.complete).toBe(true);
+        expect(state.snapshot.logs.some((line) => line.includes("宝箱开启，奖励"))).toBe(true);
+        expect(state.snapshot.logs.some((line) => line.includes("宝箱是空的"))).toBe(false);
     });
 });
 

@@ -78,13 +78,13 @@ type FinalizeRoomResult = {
 
 const ROOM_EVENT_NAMES: Record<string, string> = {
     branch_event: "分叉口",
-    chest_event: "宝箱房",
-    trap_event: "陷阱房",
-    shop_event: "商人房",
-    bonfire_event: "篝火房",
-    forge_event: "铸锻房",
-    statue_event: "雕像房",
-    mine_event: "矿洞房",
+    chest_event: "宝箱",
+    trap_event: "陷阱",
+    shop_event: "商人",
+    bonfire_event: "篝火",
+    forge_event: "铸锻间",
+    statue_event: "雕像",
+    mine_event: "矿洞",
 };
 
 const COMBAT_LOG_MARKERS = [
@@ -114,6 +114,7 @@ export class GameState {
     private shopRoomKey: string | null = null;
     private shopBuyStock: ShopBuyStockItem[] = [];
     private skipRoomConsequenceOnce = false;
+    private queuedChestMinRewards = 0;
 
     snapshot: GameSnapshot = {
         player: {
@@ -182,6 +183,7 @@ export class GameState {
         this.shopRoomKey = null;
         this.shopBuyStock = [];
         this.skipRoomConsequenceOnce = false;
+        this.queuedChestMinRewards = 0;
     }
 
     getCharacterOptions(): CharacterTuple[] {
@@ -214,20 +216,41 @@ export class GameState {
         const nonBossRooms = ROOMS.filter((room) => room[1] !== "boss_event");
         const nonBossWeights = ROOMS_WEIGHT.slice(0, nonBossRooms.length);
 
+        const pickNonRepeatingRoom = (prevEventType: RoomEventType | null): RoomTuple => {
+            let picked = weightedChoice(nonBossRooms, nonBossWeights);
+            if (!prevEventType) return picked;
+
+            let guard = 0;
+            while (picked[1] === prevEventType && guard < 24) {
+                picked = weightedChoice(nonBossRooms, nonBossWeights);
+                guard += 1;
+            }
+
+            if (picked[1] === prevEventType) {
+                const fallback = nonBossRooms.find((room) => room[1] !== prevEventType);
+                return fallback ?? picked;
+            }
+
+            return picked;
+        };
+
         for (let floor = 1; floor <= FLOOR; floor += 1) {
             const roomCount = floor + ROOM_ADD;
+            let prevEventType: RoomEventType | null = null;
             for (let room = 1; room <= roomCount; room += 1) {
                 const key = `${floor}-${room}`;
-                const tuple = room < roomCount ? weightedChoice(nonBossRooms, nonBossWeights) : ROOMS[ROOMS.length - 1];
+                const tuple = room < roomCount ? pickNonRepeatingRoom(prevEventType) : ROOMS[ROOMS.length - 1];
+                const tupleEventType = tuple[1] as RoomEventType;
                 nextMap[key] = {
                     key,
                     floor,
                     index: room,
                     name: tuple[0],
-                    eventType: tuple[1] as RoomEventType,
-                    revealed: tuple[1] === "boss_event",
+                    eventType: tupleEventType,
+                    revealed: tupleEventType === "boss_event",
                     reorderedByBranch: false,
                 };
+                prevEventType = tupleEventType;
             }
 
             const replaceCount = randomInt(0, Math.min(floor, 2));
@@ -236,12 +259,37 @@ export class GameState {
                 const j = randomInt(0, i);
                 [candidateIndexes[i], candidateIndexes[j]] = [candidateIndexes[j], candidateIndexes[i]];
             }
-            candidateIndexes.slice(0, replaceCount).forEach((roomIdx) => {
+            const branchIndexes: number[] = [];
+            candidateIndexes.forEach((roomIdx) => {
+                if (branchIndexes.length >= replaceCount) return;
+                if (branchIndexes.some((idx) => Math.abs(idx - roomIdx) === 1)) return;
+                branchIndexes.push(roomIdx);
+            });
+
+            branchIndexes.forEach((roomIdx) => {
                 const key = `${floor}-${roomIdx}`;
                 const branches: RoomTuple[] = [];
                 const branchCount = randomInt(2, 3);
-                while (branches.length < branchCount) {
-                    branches.push(weightedChoice(nonBossRooms, nonBossWeights));
+                const pickedEvents = new Set<string>();
+                let guard = 0;
+
+                while (branches.length < branchCount && guard < 32) {
+                    const picked = weightedChoice(nonBossRooms, nonBossWeights);
+                    if (!pickedEvents.has(picked[1])) {
+                        branches.push(picked);
+                        pickedEvents.add(picked[1]);
+                    }
+                    guard += 1;
+                }
+
+                if (branches.length < branchCount) {
+                    const fallback = nonBossRooms.filter((room) => !pickedEvents.has(room[1]));
+                    while (branches.length < branchCount && fallback.length > 0) {
+                        const idx = randomInt(0, fallback.length - 1);
+                        const [picked] = fallback.splice(idx, 1);
+                        branches.push(picked);
+                        pickedEvents.add(picked[1]);
+                    }
                 }
                 nextMap[key] = {
                     key,
@@ -344,7 +392,8 @@ export class GameState {
                 }
                 const branchActions = room.branches.map((branch, index) => ({
                     id: `branch_${index}`,
-                    label: `选择分支 ${String.fromCharCode(65 + index)}: ${branch[0]}`,
+                    label: `选择分支 ${String.fromCharCode(65 + index)}: ${room.revealedBranchIndexes?.includes(index) ? branch[0] : "?"
+                        }`,
                 }));
                 branchActions.push({ id: "leave", label: "放弃分支，继续前进" });
                 return branchActions;
@@ -449,7 +498,8 @@ export class GameState {
                 return this.resolveBranchAction(actionId);
             case "chest_event":
                 if (actionId === "open") {
-                    this.resolveChestRewards();
+                    this.resolveChestRewards(this.queuedChestMinRewards);
+                    this.queuedChestMinRewards = 0;
                 }
                 return { complete: true };
             case "trap_event":
@@ -599,6 +649,14 @@ export class GameState {
             this.addLog("盗贼被动触发：击败 Boss 获得卷轴");
         }
 
+        if (this.snapshot.player.hp > 0) {
+            const floor = Math.max(1, this.snapshot.dungeon.floor);
+            const xpMin = Math.min(floor + 1, 5);
+            const xpMax = Math.min(floor + 3, 6);
+            const reward = randomInt(xpMin, Math.max(xpMin, xpMax));
+            this.addXp(reward, "战斗结算");
+        }
+
         this.snapshot.combat.monsterName = "";
         this.snapshot.combat.monsterHp = 0;
         this.snapshot.combat.monsterAtk = 0;
@@ -624,10 +682,11 @@ export class GameState {
             this.addLog(`升级 XP Level +${gained}`);
         }
 
+        // 完成房间后通用结算
         if (this.snapshot.player.food > 0) {
             this.addFood(-1, "食物消耗");
             const heal = randomInt(ROOM_RANGES.roomConsequence.healMin, this.snapshot.dungeon.floor + 2);
-            this.addHp(heal, "食物恢复");
+            this.addHp(heal, "食物回血");
         } else {
             const loss = randomInt(ROOM_RANGES.roomConsequence.hungerLossMin, this.snapshot.dungeon.floor + 2);
             this.addHp(-loss, "饥饿损失");
@@ -653,6 +712,11 @@ export class GameState {
         this.snapshot.logs = this.snapshot.logs.filter(
             (line) => !COMBAT_LOG_MARKERS.some((marker) => line.includes(marker)),
         );
+    }
+
+    queueBonusChest(minRewards = 1): void {
+        const nextMin = Math.max(0, Math.floor(minRewards));
+        this.queuedChestMinRewards = Math.max(this.queuedChestMinRewards, nextMin);
     }
 
     private randomFrom<T>(arr: T[]): T {
@@ -761,7 +825,7 @@ export class GameState {
         }
 
         this.snapshot.combat.skillPoint -= SKILL_SP_COST.critical;
-        const multiplier = this.randomFrom([0.5, 1, 2]);
+        const multiplier = this.randomFrom([0.25, 0.5, 1.5, 2, 2.5]);
         this.addLog(`暴击倍率 x${multiplier}`);
         this.playerAttack(multiplier);
         return true;
@@ -867,9 +931,11 @@ export class GameState {
         };
     }
 
-    private resolveChestRewards(): void {
+    private resolveChestRewards(minRewards = 0): void {
         const rewardPool = ["coin", "cloudy", "life", "whetstone", "poor_armor", "superior_armor", "scroll"];
-        const rewardCount = randomInt(ROOM_RANGES.chestRewardCount.min, ROOM_RANGES.chestRewardCount.max);
+        const minCount = Math.max(ROOM_RANGES.chestRewardCount.min, minRewards);
+        const maxCount = Math.max(minCount, ROOM_RANGES.chestRewardCount.max);
+        const rewardCount = randomInt(minCount, maxCount);
         const picked = new Set<string>();
         while (picked.size < rewardCount) {
             picked.add(this.randomFrom(rewardPool));
@@ -888,10 +954,10 @@ export class GameState {
                 const safeDelta = this.snapshot.player.hp + delta <= 0 ? 1 - this.snapshot.player.hp : delta;
                 this.addHp(safeDelta, "浑浊药水");
             } else if (reward === "life") {
-                this.addHp(6, "生命药水");
+                this.addHp(10, "秘制生命药水");
             } else if (reward === "whetstone") {
-                this.snapshot.player.extraAtk += 1;
-                this.addLog("磨刀石: ATK Extra +1");
+                this.snapshot.player.extraAtk += 2;
+                this.addLog("优质磨刀石: ATK Extra +2");
             } else if (reward === "poor_armor") {
                 this.addDefense(randomInt(ROOM_RANGES.poorArmor.min, ROOM_RANGES.poorArmor.max), "破损护甲");
             } else if (reward === "superior_armor") {
@@ -914,7 +980,7 @@ export class GameState {
                 this.gainRandomScroll("火球术");
             } else if (trap === "acid") {
                 this.snapshot.player.extraAtk += 1;
-                this.addLog("磨刀石奖励: ATK Extra +1");
+                this.addLog("酸雾让剑更锋利了: ATK Extra +1");
             } else if (trap === "rock") {
                 this.addCoin(randomInt(ROOM_RANGES.trapReward.rockCoin.min, ROOM_RANGES.trapReward.rockCoin.max), "岩石奖励");
             } else {
@@ -942,7 +1008,7 @@ export class GameState {
 
         if (Math.random() < ROOM_RANGES.trapCompensateRate) {
             this.addXp(randomInt(1, 3), "陷阱补偿");
-            this.addLog("获得陷阱补偿");
+            this.addLog("摆脱陷阱精进了战斗技巧");
         }
         return { complete: true };
     }
@@ -1255,13 +1321,13 @@ export class GameState {
         const sameFloorKey = `${room.floor}-${room.index + 1}`;
         if (Math.random() < NEXT_ROOM_REVEAL_RATE && this.snapshot.dungeon.map[sameFloorKey]) {
             this.revealRoomWithBranchRule(sameFloorKey);
-            this.addLog(`侦查到同层线索: ${sameFloorKey}`);
+            this.addLog(`侦查到下个房间线索: ${sameFloorKey}`);
         }
 
         const nextFloorKey = `${room.floor + 1}-${room.index}`;
         if (Math.random() < NEXT_FLOOR_REVEAL_RATE && this.snapshot.dungeon.map[nextFloorKey]) {
             this.revealRoomWithBranchRule(nextFloorKey);
-            this.addLog(`侦查到下层线索: ${nextFloorKey}`);
+            this.addLog(`侦查到下层房间线索: ${nextFloorKey}`);
         }
     }
 
@@ -1271,8 +1337,10 @@ export class GameState {
         room.revealed = true;
 
         if (room.eventType === "branch_event" && room.branches && room.branches.length > 0) {
-            const branch = this.randomFrom(room.branches);
-            room.branches = [branch];
+            if (!room.revealedBranchIndexes || room.revealedBranchIndexes.length === 0) {
+                const revealedIdx = randomInt(0, room.branches.length - 1);
+                room.revealedBranchIndexes = [revealedIdx];
+            }
         }
     }
 

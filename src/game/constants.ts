@@ -100,7 +100,7 @@ export const SHOP_BUY_POOL: ShopBuyTemplate[] = [
 ];
 
 export const ROOM_RANGES = {
-    chestRewardCount: { min: 0, max: 4 },
+    chestRewardCount: { min: 1, max: 4 },
     chestCoin: { min: 2, max: 8 },
     cloudyPotion: { min: -2, max: 4 },
     poorArmor: { min: 3, max: 6 },

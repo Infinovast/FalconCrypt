@@ -26,6 +26,16 @@ type ResourceSpendKey = "hp" | "defense" | "skillPoint" | "food" | "coin" | "scr
 
 type ResourceSpendPreview = Partial<Record<ResourceSpendKey, number>>;
 
+type ResourceGainKey = "hp" | "defense" | "skillPoint" | "food" | "coin" | "xp" | "extraAtk";
+
+type ResourceGainHint = "plusplus" | "plusminus" | "plusmaybe";
+
+type ResourceGainPreview = Partial<Record<ResourceGainKey, ResourceGainHint>>;
+
+type ResourceDeltaRange = { min: number; max: number };
+
+type ResourceDeltaRanges = Partial<Record<ResourceGainKey, ResourceDeltaRange>>;
+
 type SegmentedResourceProps = {
     icon: string;
     label: string;
@@ -33,6 +43,7 @@ type SegmentedResourceProps = {
     max: number;
     segments?: number;
     consumeCount?: number;
+    gainHint?: ResourceGainHint;
     tone?: "hp" | "shield" | "enemy";
     threshold: ThresholdRule;
 };
@@ -45,6 +56,7 @@ type IconStripResourceProps = {
     maxValue?: number;
     segments?: number;
     consumeCount?: number;
+    gainHint?: ResourceGainHint;
     tone?: "coin" | "path" | "food";
     threshold: ThresholdRule;
 };
@@ -203,6 +215,51 @@ const parseSpendPreviewFromLabel = (label: string): ResourceSpendPreview => {
 const hasSpendPreview = (preview: ResourceSpendPreview): boolean =>
     Object.values(preview).some((value) => typeof value === "number" && value > 0);
 
+const addDeltaRange = (ranges: ResourceDeltaRanges, key: ResourceGainKey, minDelta: number, maxDelta: number): void => {
+    const prev = ranges[key] ?? { min: 0, max: 0 };
+    ranges[key] = {
+        min: prev.min + minDelta,
+        max: prev.max + maxDelta,
+    };
+};
+
+const applySpendPreviewAsNegativeRanges = (ranges: ResourceDeltaRanges, spendPreview: ResourceSpendPreview): void => {
+    if (spendPreview.hp) addDeltaRange(ranges, "hp", -spendPreview.hp, -spendPreview.hp);
+    if (spendPreview.defense) addDeltaRange(ranges, "defense", -spendPreview.defense, -spendPreview.defense);
+    if (spendPreview.skillPoint) addDeltaRange(ranges, "skillPoint", -spendPreview.skillPoint, -spendPreview.skillPoint);
+    if (spendPreview.food) addDeltaRange(ranges, "food", -spendPreview.food, -spendPreview.food);
+    if (spendPreview.coin) addDeltaRange(ranges, "coin", -spendPreview.coin, -spendPreview.coin);
+};
+
+const buildGainPreviewFromRanges = (ranges: ResourceDeltaRanges): ResourceGainPreview => {
+    const preview: ResourceGainPreview = {};
+    const keys: ResourceGainKey[] = ["hp", "defense", "skillPoint", "food", "coin", "xp", "extraAtk"];
+
+    keys.forEach((key) => {
+        const range = ranges[key];
+        if (!range) return;
+        if (range.max > 0 && range.min > 0) {
+            preview[key] = "plusplus";
+        } else if (range.max > 0 && range.min < 0) {
+            preview[key] = "plusminus";
+        } else if (range.max > 0 && range.min === 0) {
+            preview[key] = "plusmaybe";
+        }
+    });
+
+    return preview;
+};
+
+const hasGainPreview = (preview: ResourceGainPreview): boolean =>
+    Object.values(preview).some((value) => value === "plusplus" || value === "plusminus" || value === "plusmaybe");
+
+const gainHintText = (hint?: ResourceGainHint): string => {
+    if (hint === "plusminus") return "+-";
+    if (hint === "plusmaybe") return "+?";
+    if (hint === "plusplus") return "++";
+    return "";
+};
+
 const DISABLED_THRESHOLD_RULE: ThresholdRule = {
     warning: THRESHOLD_DISABLED,
     critical: THRESHOLD_DISABLED,
@@ -223,7 +280,7 @@ function useDeltaClass(value: number): "" | "delta-up" | "delta-down" {
     return deltaClass;
 }
 
-function SegmentedResource({ icon, label, value, max, segments, consumeCount = 0, tone = "hp", threshold }: SegmentedResourceProps): JSX.Element {
+function SegmentedResource({ icon, label, value, max, segments, consumeCount = 0, gainHint, tone = "hp", threshold }: SegmentedResourceProps): JSX.Element {
     const safeMax = Math.max(1, max);
     const clampedValue = Math.max(0, Math.min(value, safeMax));
     const fillRatio = clampedValue / safeMax;
@@ -241,6 +298,11 @@ function SegmentedResource({ icon, label, value, max, segments, consumeCount = 0
                         {icon}
                     </span>
                     {label}
+                    {gainHint && (
+                        <span className={`resource-label-hint ${gainHint === "plusminus" ? "is-mixed" : gainHint === "plusmaybe" ? "is-maybe" : ""}`}>
+                            {gainHintText(gainHint)}
+                        </span>
+                    )}
                 </span>
                 <strong className="resource-value">
                     {Math.max(0, value)}/{safeMax}
@@ -263,7 +325,7 @@ function SegmentedResource({ icon, label, value, max, segments, consumeCount = 0
     );
 }
 
-function IconStripResource({ icon, label, value, unit, maxValue, segments, consumeCount = 0, tone = "path", threshold }: IconStripResourceProps): JSX.Element {
+function IconStripResource({ icon, label, value, unit, maxValue, segments, consumeCount = 0, gainHint, tone = "path", threshold }: IconStripResourceProps): JSX.Element {
     const safeUnit = Math.max(1, unit);
     const safeMax = Math.max(1, maxValue ?? value);
     const maxUnits = Math.min(RESOURCE_SEGMENT_MAX, Math.max(1, Math.ceil(segments ?? safeMax / safeUnit)));
@@ -281,6 +343,11 @@ function IconStripResource({ icon, label, value, unit, maxValue, segments, consu
                         {icon}
                     </span>
                     {label}
+                    {gainHint && (
+                        <span className={`resource-label-hint ${gainHint === "plusminus" ? "is-mixed" : gainHint === "plusmaybe" ? "is-maybe" : ""}`}>
+                            {gainHintText(gainHint)}
+                        </span>
+                    )}
                 </span>
                 <strong className="resource-value">
                     {value}/{safeMax}
@@ -302,6 +369,7 @@ type XpCompositeResourceProps = {
     xp: number;
     xpMax: number;
     xpLevel: number;
+    gainHint?: ResourceGainHint;
 };
 
 type MonsterCompositeResourceProps = {
@@ -318,7 +386,7 @@ type ProgressCompositeResourceProps = {
     floorMax: number;
 };
 
-function XpCompositeResource({ xp, xpMax, xpLevel }: XpCompositeResourceProps): JSX.Element {
+function XpCompositeResource({ xp, xpMax, xpLevel, gainHint }: XpCompositeResourceProps): JSX.Element {
     const safeXpMax = Math.max(1, xpMax);
     const safeXp = Math.max(0, Math.min(xp, safeXpMax));
     const xpRatio = safeXp / safeXpMax;
@@ -343,6 +411,11 @@ function XpCompositeResource({ xp, xpMax, xpLevel }: XpCompositeResourceProps): 
                         ✧
                     </span>
                     经验
+                    {gainHint && (
+                        <span className={`resource-label-hint ${gainHint === "plusminus" ? "is-mixed" : gainHint === "plusmaybe" ? "is-maybe" : ""}`}>
+                            {gainHintText(gainHint)}
+                        </span>
+                    )}
                 </span>
             </div>
             <div className="xp-composite" role="img" aria-label={`经验 XP ${safeXp} / ${safeXpMax}，等级 ${safeLevel} / ${levelScaleMax}`}>
@@ -493,6 +566,8 @@ function ProgressCompositeResource({ room, roomMax, floor, floorMax }: ProgressC
 export function App(): JSX.Element {
     const [stage, setStage] = useState<Stage>("menu");
     const [tick, setTick] = useState(0);
+    const [showWelcomeFx, setShowWelcomeFx] = useState(false);
+    const [welcomeFxKey, setWelcomeFxKey] = useState(0);
     const [combatIntroTriggerKey, setCombatIntroTriggerKey] = useState(0);
     const [combatActionTriggerKey, setCombatActionTriggerKey] = useState(0);
     const [combatActionType, setCombatActionType] = useState<CombatActionType>("attack");
@@ -505,13 +580,17 @@ export function App(): JSX.Element {
     const [hoveredChar, setHoveredChar] = useState<CharacterTuple | null>(null);
     const [activeEvent, setActiveEvent] = useState<RoomEventType | null>(null);
     const [activeRoomKey, setActiveRoomKey] = useState<string | null>(null);
+    const [pendingBossBonusChest, setPendingBossBonusChest] = useState(false);
+    const [eventAwaitingLeave, setEventAwaitingLeave] = useState(false);
     const [buttonsAnimating, setButtonsAnimating] = useState(false);
     const [hoveredSpendPreview, setHoveredSpendPreview] = useState<ResourceSpendPreview | null>(null);
+    const [hoveredGainPreview, setHoveredGainPreview] = useState<ResourceGainPreview | null>(null);
     const hpPeakRef = useRef(1);
     const foodPeakRef = useRef(1);
     const coinPeakRef = useRef(1);
     const actionsRef = useRef<HTMLDivElement | null>(null);
     const actionAnimTimerRef = useRef<number | null>(null);
+    const welcomeFxTimerRef = useRef<number | null>(null);
     const prevStageRef = useRef<Stage>("menu");
 
     const snapshot = gameState.snapshot;
@@ -570,8 +649,11 @@ export function App(): JSX.Element {
     const monsterMax = snapshot.combat.monsterName
         ? Math.max(18 + snapshot.dungeon.floor * 4, snapshot.combat.monsterHp, 1)
         : 1;
+    const effectiveMonsterAtk = snapshot.combat.monsterName
+        ? Math.max(0, snapshot.combat.monsterAtk + snapshot.combat.tempMonsterAtkDelta)
+        : 0;
     const monsterAtkMax = snapshot.combat.monsterName
-        ? Math.max(snapshot.dungeon.floor + 6, snapshot.combat.monsterAtk, 1)
+        ? Math.max(snapshot.dungeon.floor + 6, snapshot.combat.monsterAtk, effectiveMonsterAtk, 1)
         : 1;
     const coinMax = coinHistoryCap;
     const floorMax = Math.max(FLOOR, snapshot.dungeon.floor, 1);
@@ -593,10 +675,21 @@ export function App(): JSX.Element {
 
     const refresh = () => setTick((v) => v + 1);
 
-    const clearHoveredSpendPreview = () => setHoveredSpendPreview(null);
+    const clearHoveredResourcePreview = () => {
+        setHoveredSpendPreview(null);
+        setHoveredGainPreview(null);
+    };
 
     const buildActionSpendPreview = (action: { id: string; label: string }): ResourceSpendPreview => {
         const preview = parseSpendPreviewFromLabel(action.label);
+
+        if (stage === "event" && action.id === "leave-room") {
+            if (snapshot.player.food > 0) {
+                mergeSpendPreview(preview, "food", 1);
+            } else {
+                mergeSpendPreview(preview, "hp", ROOM_RANGES.roomConsequence.hungerLossMin);
+            }
+        }
 
         if (action.id === "shop_sell_food") {
             mergeSpendPreview(preview, "food", 1);
@@ -648,21 +741,133 @@ export function App(): JSX.Element {
         return preview;
     };
 
+    const buildActionGainPreview = (action: { id: string; label: string }, spendPreview: ResourceSpendPreview): ResourceGainPreview => {
+        const ranges: ResourceDeltaRanges = {};
+        applySpendPreviewAsNegativeRanges(ranges, spendPreview);
+
+        if (stage === "event" && action.id === "leave-room") {
+            if (snapshot.player.food > 0) {
+                addDeltaRange(ranges, "hp", ROOM_RANGES.roomConsequence.healMin, snapshot.dungeon.floor + 2);
+            }
+            if (snapshot.player.defense < snapshot.player.defenseMax) {
+                addDeltaRange(ranges, "defense", 1, 1);
+            }
+        }
+
+        if (stage === "event") {
+            if (activeEvent === "shop_event") {
+                if (action.id.startsWith("shop_buy_")) {
+                    const itemId = action.id.replace("shop_buy_", "");
+                    if (itemId === "small_hp") addDeltaRange(ranges, "hp", 5, 5);
+                    if (itemId === "large_hp") addDeltaRange(ranges, "hp", 9, 9);
+                    if (itemId === "poor_armor") addDeltaRange(ranges, "defense", ROOM_RANGES.poorArmor.min, ROOM_RANGES.poorArmor.max);
+                    if (itemId === "coin_bag") addDeltaRange(ranges, "coin", 1, 5);
+                    if (itemId === "small_ration") addDeltaRange(ranges, "food", 2, 2);
+                    if (itemId === "large_ration") addDeltaRange(ranges, "food", 5, 5);
+                    if (itemId === "whetstone") addDeltaRange(ranges, "extraAtk", 1, 1);
+                }
+                if (action.id === "shop_sell_armor_shard") addDeltaRange(ranges, "coin", 5, 5);
+                if (action.id === "shop_sell_food") addDeltaRange(ranges, "coin", 1, 1);
+                if (action.id === "shop_sell_scroll") addDeltaRange(ranges, "coin", 5, 5);
+            }
+
+            if (activeEvent === "chest_event" && action.id === "open") {
+                addDeltaRange(ranges, "hp", -Math.abs(ROOM_RANGES.cloudyPotion.min), 6 + ROOM_RANGES.cloudyPotion.max);
+                addDeltaRange(ranges, "coin", 0, ROOM_RANGES.chestCoin.max);
+                addDeltaRange(ranges, "food", 0, ROOM_RANGES.trapReward.spikeFood.max);
+                addDeltaRange(ranges, "defense", 0, ROOM_RANGES.poorArmor.max);
+                addDeltaRange(ranges, "extraAtk", 0, 1);
+            }
+
+            if (activeEvent === "trap_event" && (action.id === "disarm" || action.id === "rush")) {
+                addDeltaRange(ranges, "extraAtk", 0, 1);
+            }
+
+            if (activeEvent === "bonfire_event") {
+                if (action.id === "heal") addDeltaRange(ranges, "hp", ROOM_RANGES.bonfire.heal.min, ROOM_RANGES.bonfire.heal.max);
+                if (action.id === "cook") addDeltaRange(ranges, "food", ROOM_RANGES.bonfire.cook.min, ROOM_RANGES.bonfire.cook.max);
+                if (action.id === "polish") addDeltaRange(ranges, "extraAtk", -1, 2);
+                if (action.id === "search") {
+                    addDeltaRange(ranges, "food", 0, ROOM_RANGES.bonfire.foundFood.max);
+                    addDeltaRange(ranges, "coin", 0, ROOM_RANGES.bonfire.foundCoin.max);
+                }
+            }
+
+            if (activeEvent === "forge_event") {
+                if (action.id === "weapon") {
+                    addDeltaRange(ranges, "extraAtk", -1, 2);
+                }
+                if (action.id === "armor") {
+                    addDeltaRange(ranges, "defense", 1, 1);
+                }
+            }
+
+            if (activeEvent === "statue_event" && (action.id === "pray" || action.id === "offer")) {
+                addDeltaRange(ranges, "hp", -ROOM_RANGES.statueCurseTrueDamage.max, ROOM_RANGES.statueBless.hp.max);
+                addDeltaRange(ranges, "xp", -1, ROOM_RANGES.statueBless.xp.jackpot);
+                addDeltaRange(ranges, "defense", 0, ROOM_RANGES.statueBless.def.max);
+                addDeltaRange(ranges, "extraAtk", 0, 1);
+            }
+
+            if (activeEvent === "mine_event" && action.id === "dig") {
+                const hpDownFromDig = snapshot.player.food > 0 ? 0 : ROOM_RANGES.mine.noFoodTrueDamage.max;
+                const hpDownFromCloudy = Math.abs(ROOM_RANGES.cloudyPotion.min);
+                const hpUpFromChest = 6 + ROOM_RANGES.cloudyPotion.max;
+                const hpUpFromPlant = ROOM_RANGES.mine.plantHp.max;
+                const hpDown = Math.max(hpDownFromDig, hpDownFromCloudy);
+                const hpUp = Math.max(hpUpFromChest, hpUpFromPlant);
+                addDeltaRange(ranges, "hp", -hpDown, hpUp);
+
+                if (snapshot.player.food > 0) {
+                    addDeltaRange(ranges, "food", ROOM_RANGES.mine.plantFood.min - 1, ROOM_RANGES.mine.plantFood.max - 1);
+                } else {
+                    addDeltaRange(ranges, "food", 0, ROOM_RANGES.mine.plantFood.max);
+                }
+
+                addDeltaRange(ranges, "coin", 0, Math.max(ROOM_RANGES.mine.normalCoin.max, ROOM_RANGES.chestCoin.max));
+                addDeltaRange(ranges, "extraAtk", 0, 1);
+            }
+        }
+
+        if (stage === "combat") {
+            if (action.id === "skill") {
+                const role = snapshot.player.character?.[0];
+                if (role === "祭司") {
+                    addDeltaRange(ranges, "extraAtk", 1, 3);
+                }
+                if (role === "刺客") {
+                    addDeltaRange(ranges, "extraAtk", 2, 4);
+                }
+            }
+            if (action.id === "scroll" && snapshot.player.scroll === "治疗术") {
+                if (snapshot.player.hp > 10) {
+                    addDeltaRange(ranges, "hp", 4, 7);
+                } else {
+                    addDeltaRange(ranges, "hp", 9, 13);
+                }
+            }
+        }
+
+        return buildGainPreviewFromRanges(ranges);
+    };
+
     const getSpendPreviewHandlers = (action: { id: string; label: string; disabledReason?: string }) => {
         if (action.disabledReason) {
             return {};
         }
 
         const applyPreview = () => {
-            const preview = buildActionSpendPreview(action);
-            setHoveredSpendPreview(hasSpendPreview(preview) ? preview : null);
+            const spendPreview = buildActionSpendPreview(action);
+            const gainPreview = buildActionGainPreview(action, spendPreview);
+            setHoveredSpendPreview(hasSpendPreview(spendPreview) ? spendPreview : null);
+            setHoveredGainPreview(hasGainPreview(gainPreview) ? gainPreview : null);
         };
 
         return {
             onMouseEnter: applyPreview,
-            onMouseLeave: clearHoveredSpendPreview,
+            onMouseLeave: clearHoveredResourcePreview,
             onFocus: applyPreview,
-            onBlur: clearHoveredSpendPreview,
+            onBlur: clearHoveredResourcePreview,
         };
     };
 
@@ -672,8 +877,24 @@ export function App(): JSX.Element {
                 window.clearTimeout(actionAnimTimerRef.current);
                 actionAnimTimerRef.current = null;
             }
+            if (welcomeFxTimerRef.current !== null) {
+                window.clearTimeout(welcomeFxTimerRef.current);
+                welcomeFxTimerRef.current = null;
+            }
         };
     }, []);
+
+    const triggerWelcomeFx = () => {
+        setShowWelcomeFx(true);
+        setWelcomeFxKey((key) => key + 1);
+        if (welcomeFxTimerRef.current !== null) {
+            window.clearTimeout(welcomeFxTimerRef.current);
+        }
+        welcomeFxTimerRef.current = window.setTimeout(() => {
+            setShowWelcomeFx(false);
+            welcomeFxTimerRef.current = null;
+        }, 1080);
+    };
 
     useEffect(() => {
         if (prevStageRef.current !== "combat" && stage === "combat") {
@@ -683,8 +904,12 @@ export function App(): JSX.Element {
     }, [stage]);
 
     useEffect(() => {
-        setHoveredSpendPreview(null);
+        clearHoveredResourcePreview();
     }, [stage, activeEvent, pendingScroll]);
+
+    useEffect(() => {
+        setEventAwaitingLeave(false);
+    }, [stage, activeEvent]);
 
     useEffect(() => {
         if (stage === "menu" || stage === "character") {
@@ -732,7 +957,7 @@ export function App(): JSX.Element {
     const runActionWithButtonAnimation = (clickedActionId: string, action: () => void) => {
         if (buttonsAnimating) return;
 
-        setHoveredSpendPreview(null);
+        clearHoveredResourcePreview();
 
         const root = actionsRef.current;
         const allButtons = root ? Array.from(root.querySelectorAll<HTMLButtonElement>("button")) : [];
@@ -765,7 +990,7 @@ export function App(): JSX.Element {
     };
 
     const triggerAction = (actionId: string, action: () => void, withExitAnimation = true) => {
-        setHoveredSpendPreview(null);
+        clearHoveredResourcePreview();
         if (withExitAnimation) {
             runActionWithButtonAnimation(actionId, action);
             return;
@@ -786,9 +1011,10 @@ export function App(): JSX.Element {
         }
 
         if (result.playerDied) {
-            gameState.addLog("你在房间结算后倒下，本轮结束");
+            gameState.addLog("你在房间结算后倒下，游戏结束");
             setActiveRoomKey(null);
             setActiveEvent(null);
+            setPendingBossBonusChest(false);
             setStage("menu");
             return;
         }
@@ -797,25 +1023,29 @@ export function App(): JSX.Element {
             gameState.addLog("你击败了地牢终焉，获得鹰魂结晶！");
             setActiveRoomKey(null);
             setActiveEvent(null);
+            setPendingBossBonusChest(false);
             setStage("menu");
             return;
         }
 
         setActiveRoomKey(null);
         setActiveEvent(null);
+        setPendingBossBonusChest(false);
         setStage("explore");
     };
 
     const startNewRun = () => {
+        triggerWelcomeFx();
         gameState.reset();
         setCharOptions(gameState.getCharacterOptions());
-        gameState.addLog("提示：鼠标悬停在角色按钮上可预览角色信息");
+        gameState.addLog("鼠标停在一些按钮上可以预览信息，后面遇到的也一样哦");
         hpPeakRef.current = 1;
         foodPeakRef.current = 1;
         coinPeakRef.current = 1;
         setHoveredChar(null);
         setActiveEvent(null);
         setActiveRoomKey(null);
+        setPendingBossBonusChest(false);
         setStage("character");
         refresh();
     };
@@ -831,6 +1061,7 @@ export function App(): JSX.Element {
         setHoveredChar(null);
         setActiveEvent(null);
         setActiveRoomKey(null);
+        setPendingBossBonusChest(false);
         setStage("explore");
         refresh();
     };
@@ -838,6 +1069,7 @@ export function App(): JSX.Element {
     const enterRoom = () => {
         const roomKey = `${snapshot.dungeon.floor}-${snapshot.dungeon.roomIdx}`;
         gameState.clearLogs();
+        setEventAwaitingLeave(false);
         const evt = gameState.getCurrentRoomEvent();
         if (!evt) return;
         const introType = evt as RoomEventType;
@@ -860,6 +1092,7 @@ export function App(): JSX.Element {
         const result = gameState.resolveRoomAction(activeEvent, actionId);
 
         if (result.nextEventType) {
+            setEventAwaitingLeave(false);
             if (result.nextEventType === "monster_event" || result.nextEventType === "boss_event") {
                 gameState.startRoomCombat(result.nextEventType);
                 setStage("combat");
@@ -872,6 +1105,7 @@ export function App(): JSX.Element {
         }
 
         if (result.combat) {
+            setEventAwaitingLeave(false);
             gameState.startCombat(result.combat.monsterName, result.combat.hp, result.combat.atk, result.combat.isBoss);
             setStage("combat");
             refresh();
@@ -879,8 +1113,54 @@ export function App(): JSX.Element {
         }
 
         if (result.complete) {
-            finalizeRoomFlow();
+            setEventAwaitingLeave(true);
         }
+        refresh();
+    };
+
+    const leaveCurrentEvent = () => {
+        if (!activeEvent) return;
+
+        const eventTitle = gameState.getEventTitle(activeEvent);
+        const hasRoomLeaveAction = gameState.getRoomActions(activeEvent).some((action) => action.id === "leave");
+
+        if (hasRoomLeaveAction) {
+            const leaveResult = gameState.resolveRoomAction(activeEvent, "leave");
+
+            if (leaveResult.nextEventType) {
+                setEventAwaitingLeave(false);
+                if (leaveResult.nextEventType === "monster_event" || leaveResult.nextEventType === "boss_event") {
+                    gameState.startRoomCombat(leaveResult.nextEventType);
+                    setStage("combat");
+                } else {
+                    setActiveEvent(leaveResult.nextEventType);
+                    gameState.addLog(`分支落点: ${gameState.getEventTitle(leaveResult.nextEventType)}`);
+                }
+                refresh();
+                return;
+            }
+
+            if (leaveResult.combat) {
+                setEventAwaitingLeave(false);
+                gameState.startCombat(leaveResult.combat.monsterName, leaveResult.combat.hp, leaveResult.combat.atk, leaveResult.combat.isBoss);
+                setStage("combat");
+                refresh();
+                return;
+            }
+
+            if (!leaveResult.complete) {
+                refresh();
+                return;
+            }
+        }
+
+        gameState.clearLogs();
+        gameState.addLog(`离开${eventTitle}，触发通用结算`);
+        if (activeEvent === "chest_event" && pendingBossBonusChest) {
+            setPendingBossBonusChest(false);
+        }
+        setEventAwaitingLeave(false);
+        finalizeRoomFlow();
         refresh();
     };
 
@@ -893,9 +1173,19 @@ export function App(): JSX.Element {
         const result = gameState.performCombatAction(actionType);
 
         if (result.victory) {
-            gameState.addLog(`击败 ${snapshot.combat.monsterName}`);
+            const defeatedName = snapshot.combat.monsterName;
+            const wasBoss = snapshot.combat.isBoss;
+            gameState.addLog(`击败 ${defeatedName}`);
             gameState.finishCombat(true);
-            finalizeRoomFlow();
+            if (wasBoss) {
+                gameState.queueBonusChest(1);
+                setPendingBossBonusChest(true);
+                setActiveEvent("chest_event");
+                setStage("event");
+                gameState.addLog("Boss掉落宝箱：请手动开启");
+            } else {
+                finalizeRoomFlow();
+            }
         } else if (result.escaped) {
             gameState.finishCombat(false);
             finalizeRoomFlow();
@@ -903,6 +1193,7 @@ export function App(): JSX.Element {
             gameState.addLog("你已阵亡，本次游戏结束");
             gameState.finishCombat(false);
             setActiveEvent(null);
+            setPendingBossBonusChest(false);
             setStage("menu");
         }
         refresh();
@@ -915,6 +1206,14 @@ export function App(): JSX.Element {
 
     return (
         <main className="shell">
+            {showWelcomeFx && (
+                <div key={welcomeFxKey} className="welcome-fx" role="status" aria-live="polite">
+                    <div className="welcome-fx-inner">
+                        <span className="welcome-fx-kicker">欢迎你，冒险者</span>
+                        <strong className="welcome-fx-title">FALCON CRYPT</strong>
+                    </div>
+                </div>
+            )}
             <section className="left-panel">
                 <div className="map-canvas-row">
                     <div>
@@ -1073,29 +1372,42 @@ export function App(): JSX.Element {
                                                 ))}
                                             </div>
                                         </div>
-                                        <button data-action-id="shop-leave" onClick={() => triggerAction("shop-leave", () => executeRoomAction("leave"))}>
-                                            离开商人
-                                        </button>
                                     </div>
                                 ) : (
                                     <>
                                         {activeEvent === "mine_event" && (
                                             <div className="event-tip">提示：本房间只要执行过挖掘，离开后将跳过通用房间结算。</div>
                                         )}
-                                        {gameState.getRoomActions(activeEvent).map((action) => (
-                                            <button
-                                                key={action.id}
-                                                data-action-id={action.id}
-                                                onClick={() => triggerAction(action.id, () => executeRoomAction(action.id))}
-                                                disabled={Boolean(action.disabledReason)}
-                                                title={action.disabledReason}
-                                                {...getSpendPreviewHandlers(action)}
-                                            >
-                                                {action.disabledReason ? `${action.label} (${action.disabledReason})` : action.label}
-                                            </button>
-                                        ))}
+                                        {!eventAwaitingLeave &&
+                                            gameState
+                                                .getRoomActions(activeEvent)
+                                                .filter((action) => action.id !== "leave")
+                                                .map((action) => (
+                                                    <button
+                                                        key={action.id}
+                                                        data-action-id={action.id}
+                                                        onClick={() => triggerAction(action.id, () => executeRoomAction(action.id))}
+                                                        disabled={Boolean(action.disabledReason)}
+                                                        title={action.disabledReason}
+                                                        {...getSpendPreviewHandlers(action)}
+                                                    >
+                                                        {action.disabledReason ? `${action.label} (${action.disabledReason})` : action.label}
+                                                    </button>
+                                                ))}
                                     </>
                                 ))}
+                            {stage === "event" && activeEvent && (
+                                <button
+                                    data-action-id="leave-room"
+                                    onClick={() => triggerAction("leave-room", leaveCurrentEvent)}
+                                    {...getSpendPreviewHandlers({
+                                        id: "leave-room",
+                                        label: `离开${gameState.getEventTitle(activeEvent)}`,
+                                    })}
+                                >
+                                    离开{gameState.getEventTitle(activeEvent)}
+                                </button>
+                            )}
                             {stage === "combat" &&
                                 gameState.getCombatActions().map((action) => (
                                     <button
@@ -1148,6 +1460,13 @@ export function App(): JSX.Element {
                             ) : (
                                 ""
                             )}
+                            {hoveredGainPreview?.extraAtk && (
+                                <span
+                                    className={`atk-gain-hint ${hoveredGainPreview.extraAtk === "plusminus" ? "is-mixed" : hoveredGainPreview.extraAtk === "plusmaybe" ? "is-maybe" : ""}`}
+                                >
+                                    {gainHintText(hoveredGainPreview.extraAtk)}
+                                </span>
+                            )}
                         </strong>
                     </div>
                 </div>
@@ -1160,6 +1479,7 @@ export function App(): JSX.Element {
                         max={playerHpMax}
                         segments={hpSegments}
                         consumeCount={hoveredSpendPreview?.hp ?? 0}
+                        gainHint={hoveredGainPreview?.hp}
                         tone="hp"
                         threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.hp)}
                     />
@@ -1170,6 +1490,7 @@ export function App(): JSX.Element {
                         max={defenseMax}
                         segments={defSegments}
                         consumeCount={hoveredSpendPreview?.defense ?? 0}
+                        gainHint={hoveredGainPreview?.defense}
                         tone="shield"
                         threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.shield)}
                     />
@@ -1181,6 +1502,7 @@ export function App(): JSX.Element {
                             unit={1}
                             maxValue={12}
                             consumeCount={hoveredSpendPreview?.skillPoint ?? 0}
+                            gainHint={hoveredGainPreview?.skillPoint}
                             tone="path"
                             threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.path)}
                         />
@@ -1193,6 +1515,7 @@ export function App(): JSX.Element {
                         maxValue={foodMax}
                         segments={foodSegments}
                         consumeCount={hoveredSpendPreview?.food ?? 0}
+                        gainHint={hoveredGainPreview?.food}
                         tone="food"
                         threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.food)}
                     />
@@ -1204,6 +1527,7 @@ export function App(): JSX.Element {
                         maxValue={coinMax}
                         segments={coinSegments}
                         consumeCount={hoveredSpendPreview?.coin ?? 0}
+                        gainHint={hoveredGainPreview?.coin}
                         tone="coin"
                         threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.coin)}
                     />
@@ -1211,11 +1535,11 @@ export function App(): JSX.Element {
                         <MonsterCompositeResource
                             hp={snapshot.combat.monsterHp || 0}
                             hpMax={monsterMax}
-                            atk={snapshot.combat.monsterAtk || 0}
+                            atk={effectiveMonsterAtk}
                             atkMax={monsterAtkMax}
                         />
                     )}
-                    <XpCompositeResource xp={snapshot.player.xp} xpMax={XP_MAX} xpLevel={snapshot.player.xpLevel} />
+                    <XpCompositeResource xp={snapshot.player.xp} xpMax={XP_MAX} xpLevel={snapshot.player.xpLevel} gainHint={hoveredGainPreview?.xp} />
                     <ProgressCompositeResource room={snapshot.dungeon.roomIdx} roomMax={roomMax} floor={snapshot.dungeon.floor} floorMax={floorMax} />
                 </div>
 
