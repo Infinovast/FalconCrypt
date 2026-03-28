@@ -5,7 +5,9 @@ import {
     MONSTER_SEGMENT_MAX,
     RESOURCE_SEGMENT_MAX,
     RESOURCE_THRESHOLD_RULES,
+    ROOM_RANGES,
     ROOM_ADD,
+    SKILL_SP_COST,
     THRESHOLD_DISABLED,
     XP_LEVEL_SEGMENT_MAX,
     XP_MAX,
@@ -20,12 +22,17 @@ import type { RoomEventType } from "./game/types";
 
 type Stage = "menu" | "character" | "explore" | "event" | "combat";
 
+type ResourceSpendKey = "hp" | "defense" | "skillPoint" | "food" | "coin" | "scroll";
+
+type ResourceSpendPreview = Partial<Record<ResourceSpendKey, number>>;
+
 type SegmentedResourceProps = {
     icon: string;
     label: string;
     value: number;
     max: number;
     segments?: number;
+    consumeCount?: number;
     tone?: "hp" | "shield" | "enemy";
     threshold: ThresholdRule;
 };
@@ -37,6 +44,7 @@ type IconStripResourceProps = {
     unit: number;
     maxValue?: number;
     segments?: number;
+    consumeCount?: number;
     tone?: "coin" | "path" | "food";
     threshold: ThresholdRule;
 };
@@ -109,12 +117,19 @@ const RESOURCE_LOG_MARKERS = [
     "卷轴",
 ];
 
+const RESOURCE_DELTA_LOG_RE = /\b(?:HP|Coin|Food|Def(?: Max)?|XP|ATK(?: Extra)?)\b\s*[+-]\d+/;
+
 const classifyLog = (line: string): LogCategory => {
-    if (ROOM_LOG_MARKERS.some((marker) => line.includes(marker))) {
-        return "room";
-    }
     if (COMBAT_LOG_MARKERS.some((marker) => line.includes(marker))) {
         return "combat";
+    }
+    // Resource delta logs can carry room prefixes (e.g. "宝箱金币: Coin +4"),
+    // so we classify them before checking room keywords.
+    if (RESOURCE_DELTA_LOG_RE.test(line)) {
+        return "resource";
+    }
+    if (ROOM_LOG_MARKERS.some((marker) => line.includes(marker))) {
+        return "room";
     }
     if (RESOURCE_LOG_MARKERS.some((marker) => line.includes(marker))) {
         return "resource";
@@ -162,6 +177,32 @@ const calcLevelClass = (ratio: number, threshold: ThresholdRule): string => {
     return "is-safe";
 };
 
+const mergeSpendPreview = (base: ResourceSpendPreview, key: ResourceSpendKey, amount: number): void => {
+    const normalized = Math.max(0, Math.floor(amount));
+    if (normalized <= 0) return;
+    base[key] = Math.max(base[key] ?? 0, normalized);
+};
+
+const parseSpendPreviewFromLabel = (label: string): ResourceSpendPreview => {
+    const preview: ResourceSpendPreview = {};
+    const coinMatch = label.match(/-\s*(\d+)\s*Coin/i);
+    const foodMatch = label.match(/-\s*(\d+)\s*Food/i);
+    const spMatch = label.match(/-\s*(\d+)\s*SP/i);
+    const hpMatch = label.match(/-\s*(\d+)\s*HP/i);
+    const defMatch = label.match(/-\s*(\d+)\s*Def/i);
+
+    if (coinMatch) mergeSpendPreview(preview, "coin", Number(coinMatch[1]));
+    if (foodMatch) mergeSpendPreview(preview, "food", Number(foodMatch[1]));
+    if (spMatch) mergeSpendPreview(preview, "skillPoint", Number(spMatch[1]));
+    if (hpMatch) mergeSpendPreview(preview, "hp", Number(hpMatch[1]));
+    if (defMatch) mergeSpendPreview(preview, "defense", Number(defMatch[1]));
+
+    return preview;
+};
+
+const hasSpendPreview = (preview: ResourceSpendPreview): boolean =>
+    Object.values(preview).some((value) => typeof value === "number" && value > 0);
+
 const DISABLED_THRESHOLD_RULE: ThresholdRule = {
     warning: THRESHOLD_DISABLED,
     critical: THRESHOLD_DISABLED,
@@ -182,12 +223,13 @@ function useDeltaClass(value: number): "" | "delta-up" | "delta-down" {
     return deltaClass;
 }
 
-function SegmentedResource({ icon, label, value, max, segments, tone = "hp", threshold }: SegmentedResourceProps): JSX.Element {
+function SegmentedResource({ icon, label, value, max, segments, consumeCount = 0, tone = "hp", threshold }: SegmentedResourceProps): JSX.Element {
     const safeMax = Math.max(1, max);
     const clampedValue = Math.max(0, Math.min(value, safeMax));
     const fillRatio = clampedValue / safeMax;
     const segmentCount = Math.min(RESOURCE_SEGMENT_MAX, Math.max(1, Math.floor(segments ?? safeMax)));
     const filledCount = Math.round(fillRatio * segmentCount);
+    const consumeTailCount = Math.max(0, Math.min(filledCount, Math.floor(consumeCount)));
     const levelClass = calcLevelClass(fillRatio, threshold);
     const deltaClass = useDeltaClass(value);
 
@@ -210,20 +252,24 @@ function SegmentedResource({ icon, label, value, max, segments, tone = "hp", thr
                 aria-label={`${label} ${Math.max(0, value)} / ${safeMax}`}
                 style={{ gridTemplateColumns: `repeat(${segmentCount}, minmax(0, 1fr))` }}
             >
-                {Array.from({ length: segmentCount }, (_, idx) => (
-                    <span key={`${label}-${idx}`} className={idx < filledCount ? "segment on" : "segment"} />
-                ))}
+                {Array.from({ length: segmentCount }, (_, idx) => {
+                    const isOn = idx < filledCount;
+                    const isConsumePulse = isOn && consumeTailCount > 0 && idx >= filledCount - consumeTailCount;
+                    const className = ["segment", isOn ? "on" : "", isConsumePulse ? "consume-pulse" : ""].filter(Boolean).join(" ");
+                    return <span key={`${label}-${idx}`} className={className} />;
+                })}
             </div>
         </div>
     );
 }
 
-function IconStripResource({ icon, label, value, unit, maxValue, segments, tone = "path", threshold }: IconStripResourceProps): JSX.Element {
+function IconStripResource({ icon, label, value, unit, maxValue, segments, consumeCount = 0, tone = "path", threshold }: IconStripResourceProps): JSX.Element {
     const safeUnit = Math.max(1, unit);
     const safeMax = Math.max(1, maxValue ?? value);
     const maxUnits = Math.min(RESOURCE_SEGMENT_MAX, Math.max(1, Math.ceil(segments ?? safeMax / safeUnit)));
     const ratio = Math.max(0, Math.min(value, safeMax)) / safeMax;
     const capped = Math.round(ratio * maxUnits);
+    const consumeTailCount = Math.max(0, Math.min(capped, Math.floor(consumeCount)));
     const levelClass = calcLevelClass(ratio, threshold);
     const deltaClass = useDeltaClass(value);
 
@@ -241,9 +287,12 @@ function IconStripResource({ icon, label, value, unit, maxValue, segments, tone 
                 </strong>
             </div>
             <div className="icon-strip" role="img" aria-label={`${label} ${value} / ${safeMax}`}>
-                {Array.from({ length: maxUnits }, (_, idx) => (
-                    <span key={`${label}-icon-${idx}`} className={idx < capped ? "icon-node on" : "icon-node"} />
-                ))}
+                {Array.from({ length: maxUnits }, (_, idx) => {
+                    const isOn = idx < capped;
+                    const isConsumePulse = isOn && consumeTailCount > 0 && idx >= capped - consumeTailCount;
+                    const className = ["icon-node", isOn ? "on" : "", isConsumePulse ? "consume-pulse" : ""].filter(Boolean).join(" ");
+                    return <span key={`${label}-icon-${idx}`} className={className} />;
+                })}
             </div>
         </div>
     );
@@ -457,6 +506,7 @@ export function App(): JSX.Element {
     const [activeEvent, setActiveEvent] = useState<RoomEventType | null>(null);
     const [activeRoomKey, setActiveRoomKey] = useState<string | null>(null);
     const [buttonsAnimating, setButtonsAnimating] = useState(false);
+    const [hoveredSpendPreview, setHoveredSpendPreview] = useState<ResourceSpendPreview | null>(null);
     const hpPeakRef = useRef(1);
     const foodPeakRef = useRef(1);
     const coinPeakRef = useRef(1);
@@ -543,6 +593,79 @@ export function App(): JSX.Element {
 
     const refresh = () => setTick((v) => v + 1);
 
+    const clearHoveredSpendPreview = () => setHoveredSpendPreview(null);
+
+    const buildActionSpendPreview = (action: { id: string; label: string }): ResourceSpendPreview => {
+        const preview = parseSpendPreviewFromLabel(action.label);
+
+        if (action.id === "shop_sell_food") {
+            mergeSpendPreview(preview, "food", 1);
+        }
+        if (action.id === "shop_sell_scroll" || action.id === "scroll") {
+            mergeSpendPreview(preview, "scroll", 1);
+        }
+        if (action.id === "shop_sell_armor_shard") {
+            mergeSpendPreview(preview, "defense", 1);
+        }
+
+        if (stage === "combat") {
+            const role = snapshot.player.character?.[0];
+            if (action.id === "critical") {
+                mergeSpendPreview(preview, "skillPoint", SKILL_SP_COST.critical);
+            }
+            if (action.id === "skill") {
+                if (role === "圣骑士") {
+                    mergeSpendPreview(preview, "skillPoint", SKILL_SP_COST.paladin);
+                    mergeSpendPreview(preview, "food", 1);
+                }
+                if (role === "祭司") {
+                    mergeSpendPreview(preview, "skillPoint", SKILL_SP_COST.priest);
+                    mergeSpendPreview(preview, "hp", 3);
+                }
+                if (role === "刺客") {
+                    mergeSpendPreview(preview, "skillPoint", SKILL_SP_COST.assassin);
+                }
+            }
+        }
+
+        if (activeEvent === "statue_event" && action.id === "offer") {
+            if (snapshot.player.coin > 0) {
+                const minOfferCoin = Math.min(snapshot.player.coin, ROOM_RANGES.statueOfferCoin.min);
+                mergeSpendPreview(preview, "coin", minOfferCoin);
+            } else if (snapshot.player.food > 0) {
+                mergeSpendPreview(preview, "food", 1);
+            }
+        }
+
+        if (activeEvent === "mine_event" && action.id === "dig") {
+            if (snapshot.player.food > 0) {
+                mergeSpendPreview(preview, "food", 1);
+            } else {
+                mergeSpendPreview(preview, "hp", ROOM_RANGES.mine.noFoodTrueDamage.min);
+            }
+        }
+
+        return preview;
+    };
+
+    const getSpendPreviewHandlers = (action: { id: string; label: string; disabledReason?: string }) => {
+        if (action.disabledReason) {
+            return {};
+        }
+
+        const applyPreview = () => {
+            const preview = buildActionSpendPreview(action);
+            setHoveredSpendPreview(hasSpendPreview(preview) ? preview : null);
+        };
+
+        return {
+            onMouseEnter: applyPreview,
+            onMouseLeave: clearHoveredSpendPreview,
+            onFocus: applyPreview,
+            onBlur: clearHoveredSpendPreview,
+        };
+    };
+
     useEffect(() => {
         return () => {
             if (actionAnimTimerRef.current !== null) {
@@ -558,6 +681,10 @@ export function App(): JSX.Element {
         }
         prevStageRef.current = stage;
     }, [stage]);
+
+    useEffect(() => {
+        setHoveredSpendPreview(null);
+    }, [stage, activeEvent, pendingScroll]);
 
     useEffect(() => {
         if (stage === "menu" || stage === "character") {
@@ -605,6 +732,8 @@ export function App(): JSX.Element {
     const runActionWithButtonAnimation = (clickedActionId: string, action: () => void) => {
         if (buttonsAnimating) return;
 
+        setHoveredSpendPreview(null);
+
         const root = actionsRef.current;
         const allButtons = root ? Array.from(root.querySelectorAll<HTMLButtonElement>("button")) : [];
         if (allButtons.length === 0) {
@@ -636,6 +765,7 @@ export function App(): JSX.Element {
     };
 
     const triggerAction = (actionId: string, action: () => void, withExitAnimation = true) => {
+        setHoveredSpendPreview(null);
         if (withExitAnimation) {
             runActionWithButtonAnimation(actionId, action);
             return;
@@ -786,46 +916,64 @@ export function App(): JSX.Element {
     return (
         <main className="shell">
             <section className="left-panel">
-                <header className="panel-title">地图面板</header>
-                <div className="map-panel">
-                    <div className="map-floor">
-                        <div className="map-floor-title">当前层 F{snapshot.dungeon.floor}</div>
-                        <div className="map-room-list">
-                            {currentFloorMap.map((room) => (
-                                <div key={room.key} className="map-room-node">
-                                    <span
-                                        className={`map-room ${room.revealed ? "is-revealed" : ""} ${room.isCurrent ? "is-current" : ""} ${room.reorderedByBranch ? "is-reordered" : ""}`}
-                                    >
-                                        {room.floor}-{room.index} {room.display}
-                                    </span>
-                                    {room.chosenBranchName && (
-                                        <>
-                                            <span className="map-branch-link" aria-hidden="true" />
-                                            <span className="map-room map-room-branch is-revealed">{room.chosenBranchName}</span>
-                                        </>
-                                    )}
+                <div className="map-canvas-row">
+                    <div>
+                        <header className="panel-title">地图</header>
+                        <div className="map-panel">
+                            <div className="map-floor">
+                                <div className="map-floor-title">当前层 F{snapshot.dungeon.floor}</div>
+                                <div className="map-room-list">
+                                    {currentFloorMap.map((room) => (
+                                        <div key={room.key} className="map-room-node">
+                                            <span
+                                                className={`map-room ${room.revealed ? "is-revealed" : ""} ${room.isCurrent ? "is-current" : ""} ${room.reorderedByBranch ? "is-reordered" : ""}`}
+                                            >
+                                                {room.floor}-{room.index} {room.display}
+                                            </span>
+                                            {room.chosenBranchName && (
+                                                <>
+                                                    <span className="map-branch-link" aria-hidden="true" />
+                                                    <span className="map-room map-room-branch is-revealed">{room.chosenBranchName}</span>
+                                                </>
+                                            )}
+                                        </div>
+                                    ))}
                                 </div>
-                            ))}
+                            </div>
+
+                            <div className="map-floor">
+                                <div className="map-floor-title">下一层 F{nextFloor}</div>
+                                <div className="map-room-list">
+                                    {nextFloorMap.map((room) => (
+                                        <div key={room.key} className="map-room-node">
+                                            <span className={`map-room ${room.revealed ? "is-revealed" : ""} ${room.reorderedByBranch ? "is-reordered" : ""}`}>
+                                                {room.floor}-{room.index} {room.display}
+                                            </span>
+                                            {room.chosenBranchName && (
+                                                <>
+                                                    <span className="map-branch-link" aria-hidden="true" />
+                                                    <span className="map-room map-room-branch is-revealed">{room.chosenBranchName}</span>
+                                                </>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
                         </div>
                     </div>
-
-                    <div className="map-floor">
-                        <div className="map-floor-title">下一层 F{nextFloor}</div>
-                        <div className="map-room-list">
-                            {nextFloorMap.map((room) => (
-                                <div key={room.key} className="map-room-node">
-                                    <span className={`map-room ${room.revealed ? "is-revealed" : ""} ${room.reorderedByBranch ? "is-reordered" : ""}`}>
-                                        {room.floor}-{room.index} {room.display}
-                                    </span>
-                                    {room.chosenBranchName && (
-                                        <>
-                                            <span className="map-branch-link" aria-hidden="true" />
-                                            <span className="map-room map-room-branch is-revealed">{room.chosenBranchName}</span>
-                                        </>
-                                    )}
-                                </div>
-                            ))}
-                        </div>
+                    <div className="map-canvas-box">
+                        <header className="panel-title">动画</header>
+                        <GameCanvas
+                            dangerLevel={dangerLevel}
+                            combatIntroTriggerKey={combatIntroTriggerKey}
+                            combatActionTriggerKey={combatActionTriggerKey}
+                            combatActionType={combatActionType}
+                            roomIntroTriggerKey={roomIntroTriggerKey}
+                            roomIntroType={roomIntroType}
+                            resourcePulseTriggerKey={resourcePulseTriggerKey}
+                            resourcePulseTone={resourcePulseTone}
+                            resourcePulsePower={resourcePulsePower}
+                        />
                     </div>
                 </div>
 
@@ -901,6 +1049,7 @@ export function App(): JSX.Element {
                                                         onClick={() => triggerAction(action.id, () => executeRoomAction(action.id), false)}
                                                         disabled={Boolean(action.disabledReason)}
                                                         title={action.disabledReason}
+                                                        {...getSpendPreviewHandlers(action)}
                                                     >
                                                         {action.disabledReason ? `${action.label} (${action.disabledReason})` : action.label}
                                                     </button>
@@ -917,6 +1066,7 @@ export function App(): JSX.Element {
                                                         onClick={() => triggerAction(action.id, () => executeRoomAction(action.id), false)}
                                                         disabled={Boolean(action.disabledReason)}
                                                         title={action.disabledReason}
+                                                        {...getSpendPreviewHandlers(action)}
                                                     >
                                                         {action.disabledReason ? `${action.label} (${action.disabledReason})` : action.label}
                                                     </button>
@@ -939,6 +1089,7 @@ export function App(): JSX.Element {
                                                 onClick={() => triggerAction(action.id, () => executeRoomAction(action.id))}
                                                 disabled={Boolean(action.disabledReason)}
                                                 title={action.disabledReason}
+                                                {...getSpendPreviewHandlers(action)}
                                             >
                                                 {action.disabledReason ? `${action.label} (${action.disabledReason})` : action.label}
                                             </button>
@@ -953,6 +1104,7 @@ export function App(): JSX.Element {
                                         onClick={() => triggerAction(action.id, () => handleCombatAction(action.id as CombatActionType), false)}
                                         disabled={Boolean(action.disabledReason)}
                                         title={action.disabledReason}
+                                        {...getSpendPreviewHandlers(action)}
                                     >
                                         {action.disabledReason ? `${action.label} (${action.disabledReason})` : action.label}
                                     </button>
@@ -963,7 +1115,7 @@ export function App(): JSX.Element {
             </section>
 
             <section className="right-panel">
-                <header className="panel-title">状态面板</header>
+                <header className="panel-title">状态</header>
                 <div className="status-overview">
                     <div className="overview-chip">
                         <span>阶段</span>
@@ -985,7 +1137,7 @@ export function App(): JSX.Element {
                     </div>
                     <div className="overview-chip">
                         <span>卷轴</span>
-                        <strong>{displayScroll}</strong>
+                        <strong className={(hoveredSpendPreview?.scroll ?? 0) > 0 ? "scroll-preview consume-pulse" : "scroll-preview"}>{displayScroll}</strong>
                     </div>
                     <div className="overview-chip">
                         <span>攻击</span>
@@ -1007,6 +1159,7 @@ export function App(): JSX.Element {
                         value={displayHp}
                         max={playerHpMax}
                         segments={hpSegments}
+                        consumeCount={hoveredSpendPreview?.hp ?? 0}
                         tone="hp"
                         threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.hp)}
                     />
@@ -1016,6 +1169,7 @@ export function App(): JSX.Element {
                         value={displayDefense}
                         max={defenseMax}
                         segments={defSegments}
+                        consumeCount={hoveredSpendPreview?.defense ?? 0}
                         tone="shield"
                         threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.shield)}
                     />
@@ -1026,6 +1180,7 @@ export function App(): JSX.Element {
                             value={snapshot.combat.skillPoint}
                             unit={1}
                             maxValue={12}
+                            consumeCount={hoveredSpendPreview?.skillPoint ?? 0}
                             tone="path"
                             threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.path)}
                         />
@@ -1037,6 +1192,7 @@ export function App(): JSX.Element {
                         unit={1}
                         maxValue={foodMax}
                         segments={foodSegments}
+                        consumeCount={hoveredSpendPreview?.food ?? 0}
                         tone="food"
                         threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.food)}
                     />
@@ -1047,6 +1203,7 @@ export function App(): JSX.Element {
                         unit={1}
                         maxValue={coinMax}
                         segments={coinSegments}
+                        consumeCount={hoveredSpendPreview?.coin ?? 0}
                         tone="coin"
                         threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.coin)}
                     />
@@ -1062,18 +1219,6 @@ export function App(): JSX.Element {
                     <ProgressCompositeResource room={snapshot.dungeon.roomIdx} roomMax={roomMax} floor={snapshot.dungeon.floor} floorMax={floorMax} />
                 </div>
 
-                <header className="panel-title mt">动画</header>
-                <GameCanvas
-                    dangerLevel={dangerLevel}
-                    combatIntroTriggerKey={combatIntroTriggerKey}
-                    combatActionTriggerKey={combatActionTriggerKey}
-                    combatActionType={combatActionType}
-                    roomIntroTriggerKey={roomIntroTriggerKey}
-                    roomIntroType={roomIntroType}
-                    resourcePulseTriggerKey={resourcePulseTriggerKey}
-                    resourcePulseTone={resourcePulseTone}
-                    resourcePulsePower={resourcePulsePower}
-                />
             </section>
         </main>
     );
