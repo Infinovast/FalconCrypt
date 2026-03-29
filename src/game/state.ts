@@ -2,6 +2,8 @@ import {
     BOSS_BY_FLOOR,
     BRANCH_REORDER_SUCCESS_RATE,
     BRANCH_ROOM,
+    CHARACTER_OPTION_COUNT,
+    CHEST_REWARD_POOL,
     CHARS,
     FLOOR,
     MONSTER_POOL,
@@ -29,9 +31,30 @@ import type {
     RoomTuple,
     ShopInventoryView,
     ScrollType,
+    TrapType,
 } from "./types";
 
+export type DeveloperScalarField =
+    | "hp"
+    | "coin"
+    | "defense"
+    | "defenseMax"
+    | "food"
+    | "scroll"
+    | "extraAtk"
+    | "xp"
+    | "xpLevel"
+    | "skillPoint"
+    | "monsterHp"
+    | "monsterAtk"
+    | "tempExtraAtk"
+    | "tempMonsterAtkDelta"
+    | "floor"
+    | "roomIdx";
+
 const randomInt = (min: number, max: number): number => Math.floor(Math.random() * (max - min + 1)) + min;
+
+const DEVELOPER_SCROLL_CYCLE: Array<ScrollType | null> = [null, ...SCROLL_LIST];
 
 const weightedChoice = <T>(items: T[], weights: number[]): T => {
     const total = weights.reduce((a, b) => a + b, 0);
@@ -43,13 +66,13 @@ const weightedChoice = <T>(items: T[], weights: number[]): T => {
     return items[items.length - 1];
 };
 
-const sample3 = <T>(arr: T[]): T[] => {
+const sample = <T>(arr: T[], count: number): T[] => {
     const clone = [...arr];
     for (let i = clone.length - 1; i > 0; i -= 1) {
         const j = randomInt(0, i);
         [clone[i], clone[j]] = [clone[j], clone[i]];
     }
-    return clone.slice(0, 3);
+    return clone.slice(0, Math.max(0, count));
 };
 
 type RoomActionResult = {
@@ -67,6 +90,7 @@ type ShopBuyStockItem = {
     id: string;
     name: string;
     cost: number;
+    value: (typeof SHOP_BUY_POOL)[number]["value"];
     soldOut: boolean;
 };
 
@@ -77,6 +101,8 @@ type FinalizeRoomResult = {
 };
 
 const ROOM_EVENT_NAMES: Record<string, string> = {
+    monster_event: "怪物",
+    boss_event: "Boss",
     branch_event: "分叉口",
     chest_event: "宝箱",
     trap_event: "陷阱",
@@ -109,6 +135,14 @@ const COMBAT_LOG_MARKERS = [
     "隐身术",
 ];
 
+const TRAP_NAMES: Record<TrapType, string> = {
+    fire: "烈焰喷口",
+    acid: "酸雾",
+    rock: "滚石",
+    spike: "尖刺",
+    pit: "深坑",
+};
+
 export class GameState {
     private chosenChars: CharacterTuple[] = [];
     private shopRoomKey: string | null = null;
@@ -131,6 +165,8 @@ export class GameState {
             xpLevel: 1,
             scroll: null,
             pendingScroll: null,
+            hasThornsArmor: false,
+            hasHeavyArmor: false,
         },
         dungeon: {
             floor: 1,
@@ -143,10 +179,10 @@ export class GameState {
             monsterAtk: 0,
             skillPoint: SKILL_POINT_MAX,
             isBoss: false,
-            frozenEnemyTurns: 0,
+            skipCounterattackOnce: false,
             tempExtraAtk: 0,
             tempMonsterAtkDelta: 0,
-            pendingFoodCost: 0,
+            forgeUpgradeType: null,
         },
         logs: [],
     };
@@ -166,6 +202,8 @@ export class GameState {
             xpLevel: 1,
             scroll: null,
             pendingScroll: null,
+            hasThornsArmor: false,
+            hasHeavyArmor: false,
         };
         this.snapshot.dungeon = { floor: 1, roomIdx: 1, map: {} };
         this.snapshot.combat = {
@@ -174,10 +212,10 @@ export class GameState {
             monsterAtk: 0,
             skillPoint: SKILL_POINT_MAX,
             isBoss: false,
-            frozenEnemyTurns: 0,
+            skipCounterattackOnce: false,
             tempExtraAtk: 0,
             tempMonsterAtkDelta: 0,
-            pendingFoodCost: 0,
+            forgeUpgradeType: null,
         };
         this.snapshot.logs = [];
         this.shopRoomKey = null;
@@ -187,7 +225,7 @@ export class GameState {
     }
 
     getCharacterOptions(): CharacterTuple[] {
-        this.chosenChars = sample3(CHARS);
+        this.chosenChars = sample(CHARS, CHARACTER_OPTION_COUNT);
         return this.chosenChars;
     }
 
@@ -269,7 +307,7 @@ export class GameState {
             branchIndexes.forEach((roomIdx) => {
                 const key = `${floor}-${roomIdx}`;
                 const branches: RoomTuple[] = [];
-                const branchCount = randomInt(2, 3);
+                const branchCount = randomInt(ROOM_RANGES.branch.optionCount.min, ROOM_RANGES.branch.optionCount.max);
                 const pickedEvents = new Set<string>();
                 let guard = 0;
 
@@ -316,6 +354,9 @@ export class GameState {
         this.tryRevealNeighbors(room);
 
         this.addLog(`进入房间: ${room.name}`);
+        if (room.eventType === "trap_event") {
+            this.addLog("你听见机关轻响，地面和墙缝里都藏着危险");
+        }
         if (room.eventType === "shop_event") {
             this.ensureShopInventory();
         }
@@ -349,24 +390,47 @@ export class GameState {
     }
 
     getCombatActions(): RoomAction[] {
-        return [
+        const actions: RoomAction[] = [
             { id: "attack", label: "普通攻击" },
             {
                 id: "critical",
                 label: `暴击 (-${SKILL_SP_COST.critical} SP)`,
+                displayLabel: "暴击",
+                costBadges: [{ resource: "skillPoint", amount: -SKILL_SP_COST.critical }],
                 disabledReason: this.getCriticalDisabledReason(),
             },
-            {
-                id: "skill",
-                label: `角色技能: ${this.snapshot.player.skill || "-"}`,
-                disabledReason: this.getRoleSkillDisabledReason(),
-            },
-            {
-                id: "scroll",
-                label: `使用卷轴: ${this.snapshot.player.scroll ?? "无"}`,
-                disabledReason: this.getScrollDisabledReason(),
-            },
         ];
+
+        const role = this.snapshot.player.character?.[0];
+        const skillName = this.snapshot.player.skill || "-";
+        if (role !== "术士" && role !== "盗贼") {
+            const skillCost =
+                role === "圣骑士"
+                    ? SKILL_SP_COST.paladin
+                    : role === "祭司"
+                        ? SKILL_SP_COST.priest
+                        : role === "刺客"
+                            ? SKILL_SP_COST.assassin
+                            : null;
+
+            actions.push({
+                id: "skill",
+                label: skillCost ? `角色技能: ${skillName} (-${skillCost} SP)` : `角色技能: ${skillName}`,
+                displayLabel: `角色技能: ${skillName}`,
+                costBadges: skillCost ? [{ resource: "skillPoint", amount: -skillCost }] : undefined,
+                disabledReason: this.getRoleSkillDisabledReason(),
+            });
+        }
+
+        actions.push({
+            id: "scroll",
+            label: `使用卷轴: ${this.snapshot.player.scroll ?? "无"}`,
+            displayLabel: `使用卷轴: ${this.snapshot.player.scroll ?? "无"}`,
+            costBadges: this.snapshot.player.scroll ? [{ resource: "scroll", amount: -1 }] : undefined,
+            disabledReason: this.getScrollDisabledReason(),
+        });
+
+        return actions;
     }
 
     resolveScrollReplacement(accept: boolean): void {
@@ -390,65 +454,108 @@ export class GameState {
                 if (!room?.branches || room.branches.length === 0) {
                     return [{ id: "leave", label: "继续前进" }];
                 }
-                const branchActions = room.branches.map((branch, index) => ({
+                return room.branches.map((branch, index) => ({
                     id: `branch_${index}`,
                     label: `选择分支 ${String.fromCharCode(65 + index)}: ${room.revealedBranchIndexes?.includes(index) ? branch[0] : "?"
                         }`,
                 }));
-                branchActions.push({ id: "leave", label: "放弃分支，继续前进" });
-                return branchActions;
             }
             case "chest_event":
-                return [{ id: "open", label: "打开宝箱" }];
+                return [
+                    {
+                        id: "open",
+                        label: "打开宝箱",
+                        rewardBadges: [
+                            { resource: "coin", hint: "plusmaybe", range: { min: 0, max: ROOM_RANGES.trapReward.rockCoin.max } },
+                            { resource: "food", hint: "plusmaybe", range: { min: 0, max: ROOM_RANGES.trapReward.spikeFood.max } },
+                            { resource: "defenseMax", hint: "plusmaybe", range: { min: 0, max: ROOM_RANGES.trapReward.spikeDefMax } },
+                            { resource: "extraAtk", hint: "plusmaybe", range: { min: 0, max: 1 } },
+                        ],
+                    },
+                    { id: "leave", label: "离开宝箱" },
+                ];
             case "trap_event":
                 return [
-                    { id: "disarm", label: "解除陷阱" },
-                    { id: "rush", label: "强行通过" },
+                    {
+                        id: "disarm",
+                        label: "解除陷阱",
+                        rewardBadges: [{ resource: "extraAtk", hint: "plusmaybe", range: { min: 0, max: ROOM_RANGES.trapReward.acidExtraAtk } }],
+                    },
+                    {
+                        id: "rush",
+                        label: "强行通过",
+                    },
+                    { id: "leave", label: "离开陷阱" },
                 ];
             case "shop_event":
                 return [{ id: "leave", label: "离开商人" }];
             case "bonfire_event":
                 return [
-                    { id: "heal", label: "治疗" },
-                    { id: "cook", label: "加工食物" },
-                    { id: "polish", label: "打磨武器" },
-                    { id: "search", label: "搜索" },
+                    {
+                        id: "heal",
+                        label: "治疗",
+                        rewardBadges: [{ resource: "hp", hint: "plusplus", range: { min: ROOM_RANGES.bonfire.heal.min, max: ROOM_RANGES.bonfire.heal.max } }],
+                    },
+                    {
+                        id: "cook",
+                        label: "加工食物",
+                        rewardBadges: [{ resource: "food", hint: "plusplus", range: { min: ROOM_RANGES.bonfire.cook.min, max: ROOM_RANGES.bonfire.cook.max } }],
+                    },
+                    {
+                        id: "polish",
+                        label: "打磨武器",
+                        rewardBadges: [{ resource: "extraAtk", hint: "plusminus", range: { min: Math.min(...ROOM_RANGES.bonfire.polishDeltaPool), max: Math.max(...ROOM_RANGES.bonfire.polishDeltaPool) } }],
+                    },
+                    {
+                        id: "search",
+                        label: "搜索",
+                        rewardBadges: [
+                            { resource: "food", hint: "plusmaybe", range: { min: 0, max: ROOM_RANGES.bonfire.foundFood.max } },
+                            { resource: "coin", hint: "plusmaybe", range: { min: 0, max: ROOM_RANGES.bonfire.foundCoin.max } },
+                        ],
+                    },
+                    { id: "leave", label: "离开篝火" },
                 ];
             case "forge_event":
-                return [
-                    {
-                        id: "weapon",
-                        label: "升级武器 (-4 Coin)",
-                        disabledReason: this.snapshot.player.coin < 4 ? "金币不足" : undefined,
-                    },
-                    {
-                        id: "armor",
-                        label: "锻造护甲 (-5 Coin)",
-                        disabledReason:
-                            this.snapshot.player.defenseMax >= 7
-                                ? "护甲已达上限"
-                                : this.snapshot.player.coin < 5
-                                    ? "金币不足"
-                                    : undefined,
-                    },
-                    { id: "leave", label: "离开铸锻" },
-                ];
+                return this.getForgeActions();
             case "statue_event":
                 return [
-                    { id: "pray", label: "祈祷" },
+                    {
+                        id: "pray",
+                        label: "祈祷",
+                        rewardBadges: [
+                            { resource: "hp", hint: "plusminus", range: { min: -ROOM_RANGES.statueCurseTrueDamage.max, max: ROOM_RANGES.statueBless.hp.max } },
+                            { resource: "xp", hint: "plusminus", range: { min: -ROOM_RANGES.statue.curseXpLoss, max: ROOM_RANGES.statueBless.xp.jackpot } },
+                            { resource: "defense", hint: "plusmaybe", range: { min: 0, max: ROOM_RANGES.statueBless.def.max } },
+                            { resource: "extraAtk", hint: "plusmaybe", range: { min: 0, max: ROOM_RANGES.statue.blessAtkGain } },
+                        ],
+                    },
                     {
                         id: "offer",
                         label: "供奉后祈祷",
+                        displayLabel: "供奉后祈祷",
+                        costBadges:
+                            this.snapshot.player.coin > 0
+                                ? [{ resource: "coin", amount: -Math.min(this.snapshot.player.coin, ROOM_RANGES.statueOfferCoin.min) }]
+                                : this.snapshot.player.food > 0
+                                    ? [{ resource: "food", amount: -ROOM_RANGES.statue.offerFoodCost }]
+                                    : undefined,
                         disabledReason: this.snapshot.player.coin <= 0 && this.snapshot.player.food <= 0 ? "无可供奉资源" : undefined,
                     },
                     { id: "leave", label: "离开雕像" },
                 ];
             case "mine_event": {
-                const noFoodNoHp = this.snapshot.player.food <= 0 && this.snapshot.player.hp <= 1;
+                const noFoodNoHp =
+                    this.snapshot.player.food <= 0 && this.snapshot.player.hp < ROOM_RANGES.mine.minHpRequiredWithoutFood;
                 return [
                     {
                         id: "dig",
-                        label: this.snapshot.player.food > 0 ? "挖掘 (-1 Food)" : "挖掘 (-HP)",
+                        label: this.snapshot.player.food > 0 ? `挖掘 (-${ROOM_RANGES.mine.digFoodCost} Food)` : "挖掘 (-HP)",
+                        displayLabel: "挖掘",
+                        costBadges:
+                            this.snapshot.player.food > 0
+                                ? [{ resource: "food", amount: -ROOM_RANGES.mine.digFoodCost }]
+                                : [{ resource: "hp", amount: -ROOM_RANGES.mine.noFoodTrueDamage.min }],
                         disabledReason: noFoodNoHp ? "生命过低" : undefined,
                     },
                     { id: "leave", label: "离开矿洞" },
@@ -467,6 +574,8 @@ export class GameState {
             return {
                 id: `shop_buy_${item.id}`,
                 label: `${item.name} (-${item.cost} Coin)`,
+                displayLabel: item.name,
+                costBadges: [{ resource: "coin" as const, amount: -item.cost }],
                 disabledReason,
             };
         });
@@ -474,17 +583,23 @@ export class GameState {
         const sell: RoomAction[] = [
             {
                 id: "shop_sell_armor_shard",
-                label: "出售护甲片 (+5 Coin)",
-                disabledReason: this.snapshot.player.defenseMax > 1 ? undefined : "Def Max 过低",
+                label: `出售护甲片 (+${ROOM_RANGES.shop.sell.armorShard.coinGain} Coin)`,
+                displayLabel: "出售护甲片",
+                rewardBadges: [{ resource: "coin" as const, amount: ROOM_RANGES.shop.sell.armorShard.coinGain }],
+                disabledReason: this.snapshot.player.defenseMax > ROOM_RANGES.shop.sell.armorShard.minDefMax ? undefined : "Def Max 过低",
             },
             {
                 id: "shop_sell_food",
-                label: "出售食物 (+1 Coin)",
+                label: `出售食物 (+${ROOM_RANGES.shop.sell.food.coinGain} Coin)`,
+                displayLabel: "出售食物",
+                rewardBadges: [{ resource: "coin" as const, amount: ROOM_RANGES.shop.sell.food.coinGain }],
                 disabledReason: this.snapshot.player.food > 0 ? undefined : "无食物",
             },
             {
                 id: "shop_sell_scroll",
-                label: "出售卷轴 (+5 Coin)",
+                label: `出售卷轴 (+${ROOM_RANGES.shop.sell.scrollCoinGain} Coin)`,
+                displayLabel: "出售卷轴",
+                rewardBadges: [{ resource: "coin" as const, amount: ROOM_RANGES.shop.sell.scrollCoinGain }],
                 disabledReason: this.snapshot.player.scroll ? undefined : "无卷轴",
             },
         ];
@@ -526,6 +641,7 @@ export class GameState {
             this.snapshot.dungeon.floor += 1;
             this.snapshot.dungeon.roomIdx = 1;
         }
+        this.snapshot.combat.forgeUpgradeType = null;
     }
 
     finalizeCurrentRoom(expectedRoomKey: string): FinalizeRoomResult {
@@ -564,10 +680,10 @@ export class GameState {
         this.snapshot.combat.monsterAtk = atk;
         this.snapshot.combat.skillPoint = SKILL_POINT_MAX;
         this.snapshot.combat.isBoss = isBoss;
-        this.snapshot.combat.frozenEnemyTurns = 0;
+        this.snapshot.combat.skipCounterattackOnce = false;
         this.snapshot.combat.tempExtraAtk = 0;
         this.snapshot.combat.tempMonsterAtkDelta = 0;
-        this.snapshot.combat.pendingFoodCost = 0;
+        this.snapshot.combat.forgeUpgradeType = null;
         this.addLog(`遭遇 ${monsterName}`);
     }
 
@@ -589,10 +705,25 @@ export class GameState {
         if (this.snapshot.player.defense > 0) {
             const blocked = Math.min(this.snapshot.player.defense, damage);
             this.snapshot.player.defense -= blocked;
-            damage -= blocked;
+            if (!this.snapshot.player.hasHeavyArmor) {
+                damage -= blocked;
+            } else {
+                damage = blocked > 0 ? 0 : damage;
+            }
         }
         this.snapshot.player.hp = Math.max(0, this.snapshot.player.hp - damage);
         this.addLog(`${this.snapshot.combat.monsterName} 反击 ${actualAtk} (生效 ${damage})`);
+
+        if (
+            this.snapshot.player.hasThornsArmor &&
+            actualAtk > 0 &&
+            Math.random() < ROOM_RANGES.forge.thornsReflectRate
+        ) {
+            const reflectDamage = Math.max(1, Math.floor(actualAtk * ROOM_RANGES.forge.thornsReflectRatio));
+            this.snapshot.combat.monsterHp = Math.max(0, this.snapshot.combat.monsterHp - reflectDamage);
+            this.addLog(`荆棘反伤生效：${this.snapshot.combat.monsterName} 受到 ${reflectDamage} 伤害`);
+        }
+
         return damage;
     }
 
@@ -613,6 +744,7 @@ export class GameState {
                 result.escaped = true;
                 return result;
             }
+            endTurn = scrollResult.endTurn;
         }
 
         if (this.snapshot.combat.monsterHp <= 0) {
@@ -622,9 +754,9 @@ export class GameState {
 
         if (!endTurn) return result;
 
-        if (this.snapshot.combat.frozenEnemyTurns > 0) {
-            this.snapshot.combat.frozenEnemyTurns -= 1;
-            this.addLog("寒冰效果生效，敌人回合被跳过");
+        if (this.snapshot.combat.skipCounterattackOnce) {
+            this.snapshot.combat.skipCounterattackOnce = false;
+            this.addLog("寒冰效果生效，敌人冻住了本回合不反击");
             return result;
         }
 
@@ -638,12 +770,6 @@ export class GameState {
     finishCombat(victory: boolean): void {
         const wasBoss = this.snapshot.combat.isBoss;
 
-        if (this.snapshot.combat.pendingFoodCost > 0) {
-            const cost = Math.min(this.snapshot.player.food, this.snapshot.combat.pendingFoodCost);
-            this.snapshot.player.food -= cost;
-            this.addLog(`净化结算，Food -${cost}`);
-        }
-
         if (victory && wasBoss && this.snapshot.player.character?.[0] === "盗贼") {
             this.gainRandomScroll();
             this.addLog("盗贼被动触发：击败 Boss 获得卷轴");
@@ -651,9 +777,7 @@ export class GameState {
 
         if (this.snapshot.player.hp > 0) {
             const floor = Math.max(1, this.snapshot.dungeon.floor);
-            const xpMin = Math.min(floor + 1, 5);
-            const xpMax = Math.min(floor + 3, 6);
-            const reward = randomInt(xpMin, Math.max(xpMin, xpMax));
+            const reward = randomInt(floor + 1, Math.min(floor + 3, 6));
             this.addXp(reward, "战斗结算");
         }
 
@@ -662,10 +786,10 @@ export class GameState {
         this.snapshot.combat.monsterAtk = 0;
         this.snapshot.combat.skillPoint = SKILL_POINT_MAX;
         this.snapshot.combat.isBoss = false;
-        this.snapshot.combat.frozenEnemyTurns = 0;
+        this.snapshot.combat.skipCounterattackOnce = false;
         this.snapshot.combat.tempExtraAtk = 0;
         this.snapshot.combat.tempMonsterAtkDelta = 0;
-        this.snapshot.combat.pendingFoodCost = 0;
+        this.snapshot.combat.forgeUpgradeType = null;
     }
 
     processRoomConsequences(): void {
@@ -684,7 +808,7 @@ export class GameState {
 
         // 完成房间后通用结算
         if (this.snapshot.player.food > 0) {
-            this.addFood(-1, "食物消耗");
+            this.addFood(-ROOM_RANGES.roomConsequence.foodCost, "食物消耗");
             const heal = randomInt(ROOM_RANGES.roomConsequence.healMin, this.snapshot.dungeon.floor + 2);
             this.addHp(heal, "食物回血");
         } else {
@@ -693,7 +817,7 @@ export class GameState {
         }
 
         if (this.snapshot.player.defense < this.snapshot.player.defenseMax) {
-            this.addDefense(1, "护甲恢复");
+            this.addDefense(ROOM_RANGES.roomConsequence.defenseRecover, "护甲恢复");
         }
     }
 
@@ -708,10 +832,120 @@ export class GameState {
         this.snapshot.logs = [];
     }
 
+    adjustDeveloperScalar(field: DeveloperScalarField, delta: number): void {
+        const step = delta > 0 ? 1 : delta < 0 ? -1 : 0;
+        if (step === 0) return;
+
+        switch (field) {
+            case "hp":
+                this.snapshot.player.hp = Math.max(0, this.snapshot.player.hp + step);
+                break;
+            case "coin":
+                this.snapshot.player.coin = Math.max(0, this.snapshot.player.coin + step);
+                break;
+            case "defense": {
+                const next = this.snapshot.player.defense + step;
+                this.snapshot.player.defense = Math.max(0, Math.min(next, this.snapshot.player.defenseMax));
+                break;
+            }
+            case "defenseMax": {
+                const next = Math.max(1, this.snapshot.player.defenseMax + step);
+                this.snapshot.player.defenseMax = next;
+                this.snapshot.player.defense = Math.min(this.snapshot.player.defense, next);
+                break;
+            }
+            case "food":
+                this.snapshot.player.food = Math.max(0, this.snapshot.player.food + step);
+                break;
+            case "scroll": {
+                const currentIndex = DEVELOPER_SCROLL_CYCLE.indexOf(this.snapshot.player.scroll);
+                const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+                const nextIndex = (safeIndex + step + DEVELOPER_SCROLL_CYCLE.length) % DEVELOPER_SCROLL_CYCLE.length;
+                this.snapshot.player.scroll = DEVELOPER_SCROLL_CYCLE[nextIndex];
+                break;
+            }
+            case "extraAtk":
+                this.snapshot.player.extraAtk = Math.max(0, this.snapshot.player.extraAtk + step);
+                break;
+            case "xp":
+                this.snapshot.player.xp = Math.max(0, this.snapshot.player.xp + step);
+                break;
+            case "xpLevel":
+                this.snapshot.player.xpLevel = Math.max(1, this.snapshot.player.xpLevel + step);
+                break;
+            case "skillPoint":
+                this.snapshot.combat.skillPoint = Math.max(0, Math.min(SKILL_POINT_MAX, this.snapshot.combat.skillPoint + step));
+                break;
+            case "monsterHp":
+                this.snapshot.combat.monsterHp = Math.max(0, this.snapshot.combat.monsterHp + step);
+                break;
+            case "monsterAtk":
+                this.snapshot.combat.monsterAtk = Math.max(0, this.snapshot.combat.monsterAtk + step);
+                break;
+            case "tempExtraAtk":
+                this.snapshot.combat.tempExtraAtk = Math.max(0, this.snapshot.combat.tempExtraAtk + step);
+                break;
+            case "tempMonsterAtkDelta":
+                this.snapshot.combat.tempMonsterAtkDelta += step;
+                break;
+            case "floor":
+                this.setDeveloperFloor(this.snapshot.dungeon.floor + step);
+                break;
+            case "roomIdx":
+                this.setDeveloperRoomIndex(this.snapshot.dungeon.roomIdx + step);
+                break;
+            default:
+                break;
+        }
+    }
+
+    setDeveloperNextRoomType(eventType: RoomEventType): void {
+        const room = this.getDeveloperNextRoomNode();
+        if (!room) return;
+
+        room.eventType = eventType;
+        room.name = this.getEventTitle(eventType);
+        delete room.chosenBranchName;
+        delete room.chosenBranchEventType;
+        delete room.revealedBranchIndexes;
+        room.reorderedByBranch = false;
+
+        if (eventType === "branch_event") {
+            room.branches = this.buildDeveloperBranches();
+        } else {
+            delete room.branches;
+        }
+
+        if (eventType === "forge_event") {
+            this.snapshot.combat.forgeUpgradeType = null;
+        }
+    }
+
+    getDeveloperNextRoomType(): RoomEventType | null {
+        return this.getDeveloperNextRoomNode()?.eventType ?? null;
+    }
+
+    getDeveloperNextRoomKey(): string | null {
+        return this.getDeveloperNextRoomNode()?.key ?? null;
+    }
+
     clearCombatLogs(): void {
         this.snapshot.logs = this.snapshot.logs.filter(
             (line) => !COMBAT_LOG_MARKERS.some((marker) => line.includes(marker)),
         );
+    }
+
+    useHealScrollInExplore(): boolean {
+        if (this.snapshot.player.scroll !== "治疗术") {
+            this.addLog("无法使用卷轴: 无治疗术");
+            return false;
+        }
+
+        const heal = this.snapshot.player.hp > 10 ? randomInt(4, 7) : randomInt(9, 13);
+        this.addHp(heal, "治疗术");
+        this.addLog(`治疗术恢复 ${heal} HP`);
+        this.snapshot.player.scroll = null;
+        return true;
     }
 
     queueBonusChest(minRewards = 1): void {
@@ -721,6 +955,49 @@ export class GameState {
 
     private randomFrom<T>(arr: T[]): T {
         return arr[randomInt(0, arr.length - 1)];
+    }
+
+    private setDeveloperFloor(nextFloor: number): void {
+        const clampedFloor = Math.max(1, Math.min(FLOOR, nextFloor));
+        const roomCount = clampedFloor + ROOM_ADD;
+        this.snapshot.dungeon.floor = clampedFloor;
+        this.snapshot.dungeon.roomIdx = Math.max(1, Math.min(this.snapshot.dungeon.roomIdx, roomCount));
+    }
+
+    private setDeveloperRoomIndex(nextRoomIdx: number): void {
+        const roomCount = this.snapshot.dungeon.floor + ROOM_ADD;
+        this.snapshot.dungeon.roomIdx = Math.max(1, Math.min(roomCount, nextRoomIdx));
+    }
+
+    private getDeveloperNextRoomNode(): RoomNode | null {
+        const { floor, roomIdx, map } = this.snapshot.dungeon;
+        const roomCount = floor + ROOM_ADD;
+
+        let targetFloor = floor;
+        let targetIndex = roomIdx + 1;
+
+        if (targetIndex > roomCount) {
+            if (floor >= FLOOR) return null;
+            targetFloor = floor + 1;
+            targetIndex = 1;
+        }
+
+        return map[`${targetFloor}-${targetIndex}`] ?? null;
+    }
+
+    private buildDeveloperBranches(): RoomTuple[] {
+        const nonBossRooms = ROOMS.filter((room) => room[1] !== "boss_event");
+        const result: RoomTuple[] = [];
+        const used = new Set<string>();
+
+        while (result.length < 2 && used.size < nonBossRooms.length) {
+            const picked = this.randomFrom(nonBossRooms);
+            if (used.has(picked[1])) continue;
+            result.push([picked[0], picked[1]]);
+            used.add(picked[1]);
+        }
+
+        return result.length > 0 ? result : [["怪物", "monster_event"]];
     }
 
     private formatResourceLog(label: string, amount: number, source?: string): string {
@@ -749,13 +1026,12 @@ export class GameState {
     }
 
     private addDefense(amount: number, source?: string): void {
-        this.snapshot.player.defense = Math.max(0, Math.min(this.snapshot.player.defenseMax, this.snapshot.player.defense + amount));
+        this.snapshot.player.defense = Math.max(0, this.snapshot.player.defense + amount);
         this.addLog(this.formatResourceLog("Def", amount, source));
     }
 
     private addDefenseMax(amount: number, source?: string): void {
         this.snapshot.player.defenseMax = Math.max(1, this.snapshot.player.defenseMax + amount);
-        this.snapshot.player.defense = Math.min(this.snapshot.player.defense, this.snapshot.player.defenseMax);
         this.addLog(this.formatResourceLog("Def Max", amount, source));
     }
 
@@ -769,7 +1045,7 @@ export class GameState {
         if (remain > 0) {
             this.snapshot.player.hp = Math.max(0, this.snapshot.player.hp - remain);
         }
-        this.addLog(`${trueDamage ? "真实" : ""}伤害 -${amount}`);
+        this.addLog(`${trueDamage ? "真实" : ""}伤害: HP -${amount}`);
     }
 
     private gainRandomScroll(forceScroll?: ScrollType): void {
@@ -778,6 +1054,11 @@ export class GameState {
         if (!this.snapshot.player.scroll) {
             this.snapshot.player.scroll = nextScroll;
             this.addLog(`获得卷轴: ${nextScroll}`);
+            return;
+        }
+
+        if (this.snapshot.player.scroll === nextScroll) {
+            this.addLog(`发现相同卷轴: ${nextScroll}，自动丢弃`);
             return;
         }
 
@@ -843,9 +1124,9 @@ export class GameState {
             this.snapshot.combat.skillPoint -= SKILL_SP_COST.paladin;
             const n = randomInt(1, Math.min(2, this.snapshot.player.food));
             const reduction = randomInt(n, n + 1);
+            this.addFood(-n, "净化");
             this.snapshot.combat.tempMonsterAtkDelta -= reduction;
-            this.snapshot.combat.pendingFoodCost += n;
-            this.addLog(`净化生效：怪物攻击 -${reduction}，战后 Food -${n}`);
+            this.addLog(`净化生效：怪物攻击 -${reduction}`);
             return true;
         }
 
@@ -873,12 +1154,12 @@ export class GameState {
         return false;
     }
 
-    private useScrollInCombat(): { spent: boolean; escaped: boolean } {
+    private useScrollInCombat(): { spent: boolean; escaped: boolean; endTurn: boolean } {
         const scroll = this.snapshot.player.scroll;
         const disabledReason = this.getScrollDisabledReason();
         if (!scroll || disabledReason) {
             this.addLog(`无法使用卷轴: ${disabledReason ?? "无卷轴"}`);
-            return { spent: false, escaped: false };
+            return { spent: false, escaped: false, endTurn: false };
         }
 
         if (scroll === "火球术") {
@@ -886,8 +1167,8 @@ export class GameState {
             this.snapshot.combat.monsterHp -= damage;
             this.addLog(`火球术造成 ${damage} 伤害`);
         } else if (scroll === "寒冰术") {
-            this.snapshot.combat.frozenEnemyTurns = 1;
-            this.addLog("寒冰术冻结敌人 1 回合");
+            this.snapshot.combat.skipCounterattackOnce = true;
+            this.addLog("寒冰术生效：下一次攻击后敌人本回合不反击");
         } else if (scroll === "治疗术") {
             const heal = this.snapshot.player.hp > 10 ? randomInt(4, 7) : randomInt(9, 13);
             this.addHp(heal);
@@ -895,11 +1176,11 @@ export class GameState {
         } else if (scroll === "隐身术") {
             this.snapshot.player.scroll = null;
             this.addLog("隐身术生效，脱离战斗");
-            return { spent: true, escaped: true };
+            return { spent: true, escaped: true, endTurn: false };
         }
 
         this.snapshot.player.scroll = null;
-        return { spent: true, escaped: false };
+        return { spent: true, escaped: false, endTurn: false };
     }
 
     private generateMonsterEncounter(floor: number): { monsterName: string; hp: number; atk: number } {
@@ -932,7 +1213,7 @@ export class GameState {
     }
 
     private resolveChestRewards(minRewards = 0): void {
-        const rewardPool = ["coin", "cloudy", "life", "whetstone", "poor_armor", "superior_armor", "scroll"];
+        const rewardPool = CHEST_REWARD_POOL.map((reward) => reward.id);
         const minCount = Math.max(ROOM_RANGES.chestRewardCount.min, minRewards);
         const maxCount = Math.max(minCount, ROOM_RANGES.chestRewardCount.max);
         const rewardCount = randomInt(minCount, maxCount);
@@ -946,23 +1227,40 @@ export class GameState {
         }
 
         this.addLog(`宝箱开启，奖励 ${picked.size} 项`);
-        picked.forEach((reward) => {
-            if (reward === "coin") {
-                this.addCoin(randomInt(ROOM_RANGES.chestCoin.min, ROOM_RANGES.chestCoin.max), "宝箱金币");
-            } else if (reward === "cloudy") {
-                const delta = randomInt(ROOM_RANGES.cloudyPotion.min, ROOM_RANGES.cloudyPotion.max);
+        picked.forEach((rewardId) => {
+            const reward = CHEST_REWARD_POOL.find((item) => item.id === rewardId);
+            if (!reward) return;
+
+            const { value } = reward;
+
+            if (value.coin) {
+                this.addCoin(randomInt(value.coin.min, value.coin.max), reward.name);
+            }
+
+            if (value.hpRange) {
+                const delta = randomInt(value.hpRange.min, value.hpRange.max);
                 const safeDelta = this.snapshot.player.hp + delta <= 0 ? 1 - this.snapshot.player.hp : delta;
-                this.addHp(safeDelta, "浑浊药水");
-            } else if (reward === "life") {
-                this.addHp(10, "秘制生命药水");
-            } else if (reward === "whetstone") {
-                this.snapshot.player.extraAtk += 2;
-                this.addLog("优质磨刀石: ATK Extra +2");
-            } else if (reward === "poor_armor") {
-                this.addDefense(randomInt(ROOM_RANGES.poorArmor.min, ROOM_RANGES.poorArmor.max), "破损护甲");
-            } else if (reward === "superior_armor") {
-                this.addDefenseMax(2, "精良护甲");
-            } else if (reward === "scroll") {
+                this.addHp(safeDelta, reward.name);
+            }
+
+            if (typeof value.hp === "number") {
+                this.addHp(value.hp, reward.name);
+            }
+
+            if (value.defense) {
+                this.addDefense(randomInt(value.defense.min, value.defense.max), reward.name);
+            }
+
+            if (typeof value.defenseMax === "number") {
+                this.addDefenseMax(value.defenseMax, reward.name);
+            }
+
+            if (typeof value.extraAtk === "number") {
+                this.snapshot.player.extraAtk += value.extraAtk;
+                this.addLog(`${reward.name}: ATK Extra +${value.extraAtk}`);
+            }
+
+            if (value.grantsScroll) {
                 this.gainRandomScroll();
             }
         });
@@ -972,43 +1270,69 @@ export class GameState {
         const triggerChance =
             actionId === "disarm" ? ROOM_RANGES.trapTriggerRate.disarm : ROOM_RANGES.trapTriggerRate.rush;
         const triggered = Math.random() < triggerChance;
-        const trap = this.randomFrom(["fire", "acid", "rock", "spike"]);
+        const trap = this.randomFrom([...ROOM_RANGES.trapTypes]) as TrapType;
+        const trapName = TRAP_NAMES[trap];
+
+        this.addLog(`陷阱显形: ${trapName}`);
 
         if (!triggered) {
-            this.addLog("陷阱解除成功");
-            if (trap === "fire") {
-                this.gainRandomScroll("火球术");
-            } else if (trap === "acid") {
-                this.snapshot.player.extraAtk += 1;
-                this.addLog("酸雾让剑更锋利了: ATK Extra +1");
-            } else if (trap === "rock") {
-                this.addCoin(randomInt(ROOM_RANGES.trapReward.rockCoin.min, ROOM_RANGES.trapReward.rockCoin.max), "岩石奖励");
-            } else {
-                if (Math.random() < 0.5) {
-                    this.addFood(randomInt(ROOM_RANGES.trapReward.spikeFood.min, ROOM_RANGES.trapReward.spikeFood.max), "尖刺奖励");
+            if (actionId === "disarm") {
+                this.addLog(`${trapName}已被拆除，你顺手回收了可用残件`);
+                if (trap === "fire") {
+                    this.gainRandomScroll("火球术");
+                } else if (trap === "acid") {
+                    this.snapshot.player.extraAtk += ROOM_RANGES.trapReward.acidExtraAtk;
+                    this.addLog(`酸雾残液被你炼成涂层: ATK Extra +${ROOM_RANGES.trapReward.acidExtraAtk}`);
+                } else if (trap === "rock") {
+                    this.addCoin(randomInt(ROOM_RANGES.trapReward.rockCoin.min, ROOM_RANGES.trapReward.rockCoin.max), "滚石机构零件");
+                } else if (trap === "spike") {
+                    if (Math.random() < ROOM_RANGES.trapReward.spikeFoodRate) {
+                        this.addFood(randomInt(ROOM_RANGES.trapReward.spikeFood.min, ROOM_RANGES.trapReward.spikeFood.max), "尖刺机关补给");
+                    } else {
+                        this.addDefenseMax(ROOM_RANGES.trapReward.spikeDefMax, "尖刺机关补强");
+                    }
                 } else {
-                    this.addDefenseMax(2, "尖刺奖励");
+                    this.addLog("你避开了深坑边缘，但没有可回收的战利品");
                 }
+            } else {
+                this.addLog(`你抓住${trapName}运作的空档，强行穿了过去`);
             }
             return { complete: true };
         }
 
-        this.addLog("触发陷阱");
+        this.addLog(`${trapName}被触发，机关全面启动`);
         if (trap === "fire") {
-            this.applyDamage(randomInt(ROOM_RANGES.trapDamage.fireTrue.min, ROOM_RANGES.trapDamage.fireTrue.max), true);
+            const damage = randomInt(ROOM_RANGES.trapDamage.fireTrue.min, ROOM_RANGES.trapDamage.fireTrue.max);
+            this.addLog(`烈焰从墙孔喷出，灼烧你 ${damage} 点生命`);
+            this.applyDamage(damage, true);
         } else if (trap === "acid") {
             const loss = this.snapshot.player.defense;
             this.snapshot.player.defense = 0;
-            this.addLog(`酸雾腐蚀，Def -${loss}`);
+            this.addLog(`酸雾扑面而来，护甲被腐蚀殆尽: Def -${loss}`);
         } else if (trap === "rock") {
-            this.applyDamage(randomInt(ROOM_RANGES.trapDamage.rock.min, ROOM_RANGES.trapDamage.rock.max));
+            const damage = randomInt(ROOM_RANGES.trapDamage.rock.min, ROOM_RANGES.trapDamage.rock.max);
+            this.addLog(`滚石砸落，压得你踉跄后退: HP -${damage}`);
+            this.applyDamage(damage);
+        } else if (trap === "spike") {
+            const damage = randomInt(ROOM_RANGES.trapDamage.spike.min, ROOM_RANGES.trapDamage.spike.max);
+            this.addLog(`地刺猛然弹起，贯穿你的落脚点: HP -${damage}`);
+            this.applyDamage(damage);
         } else {
-            this.applyDamage(randomInt(ROOM_RANGES.trapDamage.spike.min, ROOM_RANGES.trapDamage.spike.max));
+            const damage = randomInt(ROOM_RANGES.trapDamage.pit.min, ROOM_RANGES.trapDamage.pit.max);
+            const isBottomFloor = this.snapshot.dungeon.floor >= FLOOR;
+            this.addLog(isBottomFloor ? `脚下塌陷成深坑，你重重摔伤: HP -${damage}` : `脚下塌陷成深坑，你摔向下层: HP -${damage}`);
+            this.applyDamage(damage);
+            if (!isBottomFloor) {
+                this.snapshot.dungeon.floor = Math.min(FLOOR, this.snapshot.dungeon.floor + 1);
+                const roomCount = this.snapshot.dungeon.floor + ROOM_ADD;
+                this.snapshot.dungeon.roomIdx = Math.min(this.snapshot.dungeon.roomIdx, roomCount);
+                this.addLog(`你坠入下一层的同号房间: B${this.snapshot.dungeon.floor}-${this.snapshot.dungeon.roomIdx}`);
+            }
         }
 
         if (Math.random() < ROOM_RANGES.trapCompensateRate) {
-            this.addXp(randomInt(1, 3), "陷阱补偿");
-            this.addLog("摆脱陷阱精进了战斗技巧");
+            this.addXp(randomInt(ROOM_RANGES.trapCompensateXp.min, ROOM_RANGES.trapCompensateXp.max), "陷阱补偿");
+            this.addLog("你在险境中稳住了节奏，战斗技巧有所精进");
         }
         return { complete: true };
     }
@@ -1038,36 +1362,38 @@ export class GameState {
             this.addLog(`购买: ${item.name}`);
             item.soldOut = true;
 
-            if (item.id === "small_hp") {
-                this.addHp(5, item.name);
-            } else if (item.id === "large_hp") {
-                this.addHp(9, item.name);
-            } else if (item.id === "whetstone") {
-                this.snapshot.player.extraAtk += 1;
-                this.addLog(`${item.name}: ATK Extra +1`);
-            } else if (item.id === "poor_armor") {
-                this.addDefense(randomInt(3, 6), item.name);
-            } else if (item.id === "armor_shard") {
-                this.addDefenseMax(1, item.name);
-            } else if (item.id === "coin_bag") {
-                this.addCoin(randomInt(1, 5), item.name);
-            } else if (item.id === "small_ration") {
-                this.addFood(2, item.name);
-            } else if (item.id === "large_ration") {
-                this.addFood(5, item.name);
-            } else if (item.id === "scroll") {
+            if (typeof item.value.hp === "number") {
+                this.addHp(item.value.hp, item.name);
+            }
+            if (item.value.defense) {
+                this.addDefense(randomInt(item.value.defense.min, item.value.defense.max), item.name);
+            }
+            if (typeof item.value.defenseMax === "number") {
+                this.addDefenseMax(item.value.defenseMax, item.name);
+            }
+            if (typeof item.value.extraAtk === "number") {
+                this.snapshot.player.extraAtk += item.value.extraAtk;
+                this.addLog(`${item.name}: ATK Extra +${item.value.extraAtk}`);
+            }
+            if (item.value.coin) {
+                this.addCoin(randomInt(item.value.coin.min, item.value.coin.max), item.name);
+            }
+            if (typeof item.value.food === "number") {
+                this.addFood(item.value.food, item.name);
+            }
+            if (item.value.grantsScroll) {
                 this.gainRandomScroll();
             }
             return { complete: false };
         }
 
         if (actionId === "shop_sell_armor_shard") {
-            if (this.snapshot.player.defenseMax <= 1) {
+            if (this.snapshot.player.defenseMax <= ROOM_RANGES.shop.sell.armorShard.minDefMax) {
                 this.addLog("无法出售护甲片");
                 return { complete: false };
             }
-            this.addDefenseMax(-1, "出售护甲片");
-            this.addCoin(5, "出售护甲片");
+            this.addDefenseMax(-ROOM_RANGES.shop.sell.armorShard.defMaxCost, "出售护甲片");
+            this.addCoin(ROOM_RANGES.shop.sell.armorShard.coinGain, "出售护甲片");
             this.addLog("完成: 出售护甲片");
             return { complete: false };
         }
@@ -1077,8 +1403,8 @@ export class GameState {
                 this.addLog("无法出售食物");
                 return { complete: false };
             }
-            this.addFood(-1, "出售食物");
-            this.addCoin(1, "出售食物");
+            this.addFood(-ROOM_RANGES.shop.sell.food.foodCost, "出售食物");
+            this.addCoin(ROOM_RANGES.shop.sell.food.coinGain, "出售食物");
             this.addLog("完成: 出售食物");
             return { complete: false };
         }
@@ -1089,7 +1415,7 @@ export class GameState {
                 return { complete: false };
             }
             this.snapshot.player.scroll = null;
-            this.addCoin(5, "出售卷轴");
+            this.addCoin(ROOM_RANGES.shop.sell.scrollCoinGain, "出售卷轴");
             this.addLog("完成: 出售卷轴");
             return { complete: false };
         }
@@ -1111,11 +1437,12 @@ export class GameState {
             const j = randomInt(0, i);
             [pool[i], pool[j]] = [pool[j], pool[i]];
         }
-        const stockSize = randomInt(6, 9);
+        const stockSize = randomInt(ROOM_RANGES.shop.stockSize.min, ROOM_RANGES.shop.stockSize.max);
         this.shopBuyStock = pool.slice(0, stockSize).map((item) => ({
             id: item.id,
             name: item.name,
             cost: item.cost,
+            value: item.value,
             soldOut: false,
         }));
         this.shopRoomKey = currentKey;
@@ -1139,7 +1466,7 @@ export class GameState {
             return { complete: true };
         }
         if (actionId === "polish") {
-            const delta = this.randomFrom([-1, 1, 1, 2]);
+            const delta = this.randomFrom([...ROOM_RANGES.bonfire.polishDeltaPool]);
             this.snapshot.player.extraAtk = Math.max(0, this.snapshot.player.extraAtk + delta);
             this.addLog(`篝火打磨: ATK Extra ${delta >= 0 ? "+" : ""}${delta}`);
             return { complete: true };
@@ -1173,33 +1500,147 @@ export class GameState {
         return { complete: true };
     }
 
+    getCurrentForgeUpgradeType(): "thorns" | "heavy" | null {
+        const room = this.getCurrentRoomNode();
+        if (room?.eventType !== "forge_event") return null;
+        if (!this.snapshot.combat.forgeUpgradeType) {
+            const availableUpgradePool = ROOM_RANGES.forge.upgradePool.filter((upgradeType) => {
+                if (upgradeType === "thorns") return !this.snapshot.player.hasThornsArmor;
+                if (upgradeType === "heavy") return !this.snapshot.player.hasHeavyArmor;
+                return true;
+            });
+
+            this.snapshot.combat.forgeUpgradeType = this.randomFrom([
+                ...(availableUpgradePool.length ? availableUpgradePool : ROOM_RANGES.forge.upgradePool),
+            ]);
+        }
+        return this.snapshot.combat.forgeUpgradeType;
+    }
+
+    private getForgeActions(): RoomAction[] {
+        const upgradeType = this.getCurrentForgeUpgradeType();
+        const actions: RoomAction[] = [
+            {
+                id: "weapon",
+                label: `升级武器 (-${ROOM_RANGES.forge.weaponCost} Coin)`,
+                displayLabel: "升级武器",
+                costBadges: [{ resource: "coin", amount: -ROOM_RANGES.forge.weaponCost }],
+                disabledReason: this.snapshot.player.coin < ROOM_RANGES.forge.weaponCost ? "金币不足" : undefined,
+            },
+            {
+                id: "armor",
+                label: `锻造护甲 (-${ROOM_RANGES.forge.armorCost} Coin)`,
+                displayLabel: "锻造护甲",
+                costBadges: [{ resource: "coin", amount: -ROOM_RANGES.forge.armorCost }],
+                disabledReason:
+                    this.snapshot.player.defenseMax >= ROOM_RANGES.forge.armorDefMaxCap
+                        ? "护甲已达上限"
+                        : this.snapshot.player.coin < ROOM_RANGES.forge.armorCost
+                            ? "金币不足"
+                            : undefined,
+            },
+        ];
+
+        if (upgradeType === "thorns") {
+            actions.push({
+                id: "forge_armor_thorns",
+                label: `改造护甲-荆棘 (-${ROOM_RANGES.forge.thornsCostExtraAtk} ATK Extra / -${ROOM_RANGES.forge.thornsCostCoin} Coin)`,
+                displayLabel: "改造护甲-荆棘",
+                costBadges: [
+                    { resource: "extraAtk", amount: -ROOM_RANGES.forge.thornsCostExtraAtk, label: "ATK Extra" },
+                    { resource: "coin", amount: -ROOM_RANGES.forge.thornsCostCoin },
+                ],
+                disabledReason: this.getForgeUpgradeDisabledReason("thorns"),
+            });
+        } else if (upgradeType === "heavy") {
+            actions.push({
+                id: "forge_armor_heavy",
+                label: `改造护甲-重甲 (-${ROOM_RANGES.forge.heavyArmorCostDefMax} Def Max / -${ROOM_RANGES.forge.heavyArmorCostCoin} Coin)`,
+                displayLabel: "改造护甲-重甲",
+                costBadges: [
+                    { resource: "defenseMax", amount: -ROOM_RANGES.forge.heavyArmorCostDefMax, label: "Def Max" },
+                    { resource: "coin", amount: -ROOM_RANGES.forge.heavyArmorCostCoin },
+                ],
+                disabledReason: this.getForgeUpgradeDisabledReason("heavy"),
+            });
+        }
+
+        actions.push({ id: "leave", label: "离开铸锻" });
+        return actions;
+    }
+
+    private getForgeUpgradeDisabledReason(upgradeType: "thorns" | "heavy"): string | undefined {
+        if (upgradeType === "thorns") {
+            if (this.snapshot.player.hasThornsArmor) return "已拥有荆棘";
+            if (this.snapshot.player.extraAtk < ROOM_RANGES.forge.thornsCostExtraAtk) return "ATK Extra 不足";
+            if (this.snapshot.player.coin < ROOM_RANGES.forge.thornsCostCoin) return "金币不足";
+            return undefined;
+        }
+
+        if (this.snapshot.player.hasHeavyArmor) return "已拥有重甲";
+        if (this.snapshot.player.defenseMax <= ROOM_RANGES.forge.heavyArmorCostDefMax) return "Def Max 过低";
+        if (this.snapshot.player.coin < ROOM_RANGES.forge.heavyArmorCostCoin) return "金币不足";
+        return undefined;
+    }
+
     private resolveForgeAction(actionId: string): RoomActionResult {
         if (actionId === "leave") return { complete: true };
 
         if (actionId === "weapon") {
-            if (this.snapshot.player.coin < 4) {
+            if (this.snapshot.player.coin < ROOM_RANGES.forge.weaponCost) {
                 this.addLog("金币不足，无法升级武器");
                 return { complete: false };
             }
-            this.addCoin(-4, "铸锻升级武器");
-            const delta = this.randomFrom([-1, 1, 1, 2]);
+            this.addCoin(-ROOM_RANGES.forge.weaponCost, "铸锻升级武器");
+            const delta = this.randomFrom([...ROOM_RANGES.forge.weaponDeltaPool]);
             this.snapshot.player.extraAtk = Math.max(0, this.snapshot.player.extraAtk + delta);
             this.addLog(`铸锻升级武器: ATK Extra ${delta >= 0 ? "+" : ""}${delta}`);
+            this.addXp(randomInt(ROOM_RANGES.forge.xpGain.min, ROOM_RANGES.forge.xpGain.max), "铸锻奖励");
             return { complete: true };
         }
 
-        if (this.snapshot.player.coin < 5) {
+        if (actionId === "forge_armor_thorns") {
+            const disabledReason = this.getForgeUpgradeDisabledReason("thorns");
+            if (disabledReason) {
+                this.addLog(`无法改造为荆棘: ${disabledReason}`);
+                return { complete: false };
+            }
+            this.snapshot.player.extraAtk = Math.max(0, this.snapshot.player.extraAtk - ROOM_RANGES.forge.thornsCostExtraAtk);
+            this.addLog(`荆棘改造: ATK Extra -${ROOM_RANGES.forge.thornsCostExtraAtk}`);
+            this.addCoin(-ROOM_RANGES.forge.thornsCostCoin, "铸锻改造-荆棘");
+            this.snapshot.player.hasThornsArmor = true;
+            this.addLog("护甲改造完成：获得荆棘效果");
+            this.addXp(randomInt(ROOM_RANGES.forge.xpGain.min, ROOM_RANGES.forge.xpGain.max), "铸锻奖励");
+            return { complete: true };
+        }
+
+        if (actionId === "forge_armor_heavy") {
+            const disabledReason = this.getForgeUpgradeDisabledReason("heavy");
+            if (disabledReason) {
+                this.addLog(`无法改造为重甲: ${disabledReason}`);
+                return { complete: false };
+            }
+            this.addDefenseMax(-ROOM_RANGES.forge.heavyArmorCostDefMax, "重甲改造");
+            this.addCoin(-ROOM_RANGES.forge.heavyArmorCostCoin, "铸锻改造-重甲");
+            this.snapshot.player.hasHeavyArmor = true;
+            this.addLog("护甲改造完成：获得重甲效果");
+            this.addXp(randomInt(ROOM_RANGES.forge.xpGain.min, ROOM_RANGES.forge.xpGain.max), "铸锻奖励");
+            return { complete: true };
+        }
+
+        if (this.snapshot.player.coin < ROOM_RANGES.forge.armorCost) {
             this.addLog("金币不足，无法锻造护甲");
             return { complete: false };
         }
-        if (this.snapshot.player.defenseMax >= 7) {
+        if (this.snapshot.player.defenseMax >= ROOM_RANGES.forge.armorDefMaxCap) {
             this.addLog("Def Max 已达上限");
             return { complete: false };
         }
 
-        this.addCoin(-5, "铸锻锻造护甲");
-        this.addDefenseMax(1, "铸锻锻造护甲");
-        this.addDefense(1, "铸锻锻造护甲");
+        this.addCoin(-ROOM_RANGES.forge.armorCost, "铸锻锻造护甲");
+        this.addDefenseMax(ROOM_RANGES.forge.armorDefMaxGain, "铸锻锻造护甲");
+        this.addDefense(ROOM_RANGES.forge.armorDefGain, "铸锻锻造护甲");
+        this.addXp(randomInt(ROOM_RANGES.forge.xpGain.min, ROOM_RANGES.forge.xpGain.max), "铸锻奖励");
         return { complete: true };
     }
 
@@ -1215,7 +1656,7 @@ export class GameState {
                 );
                 this.addCoin(-cost, "雕像供奉");
             } else if (this.snapshot.player.food > 0) {
-                this.addFood(-1, "雕像供奉");
+                this.addFood(-ROOM_RANGES.statue.offerFoodCost, "雕像供奉");
             } else {
                 this.addLog("无可供奉资源");
                 return { complete: false };
@@ -1231,8 +1672,8 @@ export class GameState {
             } else if (blessing === "def") {
                 this.addDefense(randomInt(ROOM_RANGES.statueBless.def.min, ROOM_RANGES.statueBless.def.max), "雕像祝福");
             } else if (blessing === "atk") {
-                this.snapshot.player.extraAtk += 1;
-                this.addLog("雕像祝福: ATK Extra +1");
+                this.snapshot.player.extraAtk += ROOM_RANGES.statue.blessAtkGain;
+                this.addLog(`雕像祝福: ATK Extra +${ROOM_RANGES.statue.blessAtkGain}`);
             } else {
                 this.addXp(
                     Math.random() < ROOM_RANGES.statueBless.xp.jackpotRate
@@ -1245,13 +1686,13 @@ export class GameState {
         }
 
         this.addLog("遭受诅咒");
-        if (Math.random() < 0.5) {
+        if (Math.random() < ROOM_RANGES.statue.curseTypeRate) {
             this.applyDamage(
                 randomInt(ROOM_RANGES.statueCurseTrueDamage.min, ROOM_RANGES.statueCurseTrueDamage.max),
                 true,
             );
         } else {
-            this.addXp(-1, "雕像诅咒");
+            this.addXp(-ROOM_RANGES.statue.curseXpLoss, "雕像诅咒");
         }
         return { complete: true };
     }
@@ -1262,9 +1703,9 @@ export class GameState {
         }
 
         if (this.snapshot.player.food > 0) {
-            this.addFood(-1, "矿洞挖掘消耗");
+            this.addFood(-ROOM_RANGES.mine.digFoodCost, "矿洞挖掘消耗");
         } else {
-            if (this.snapshot.player.hp <= 1) {
+            if (this.snapshot.player.hp < ROOM_RANGES.mine.minHpRequiredWithoutFood) {
                 this.addLog("生命过低，无法继续挖掘");
                 return { complete: false };
             }
@@ -1273,18 +1714,18 @@ export class GameState {
 
         this.skipRoomConsequenceOnce = true;
 
-        const roll = randomInt(1, 100);
+        const roll = randomInt(1, ROOM_RANGES.mine.rollMax);
         if (roll <= ROOM_RANGES.mine.chestRateUpper) {
             this.addLog("挖到埋藏宝箱");
             this.resolveChestRewards();
             return { complete: false };
         }
         if (roll <= ROOM_RANGES.mine.rareOreRateUpper) {
-            if (Math.random() < 0.5) {
-                this.snapshot.player.extraAtk += 1;
-                this.addLog("矿洞稀有矿石: ATK Extra +1");
+            if (Math.random() < ROOM_RANGES.mine.rareOreAtkRate) {
+                this.snapshot.player.extraAtk += ROOM_RANGES.mine.rareOreAtkGain;
+                this.addLog(`矿洞稀有矿石: ATK Extra +${ROOM_RANGES.mine.rareOreAtkGain}`);
             } else {
-                this.addDefenseMax(2, "矿洞稀有矿石");
+                this.addDefenseMax(ROOM_RANGES.mine.rareOreDefMaxGain, "矿洞稀有矿石");
             }
             return { complete: false };
         }
@@ -1346,15 +1787,6 @@ export class GameState {
 
     private resolveBranchAction(actionId: string): RoomActionResult {
         const room = this.getCurrentRoomNode();
-
-        if (actionId === "leave") {
-            if (room) {
-                room.chosenBranchName = undefined;
-                room.chosenBranchEventType = undefined;
-            }
-            this.addLog("放弃分支，沿原路线前进");
-            return { complete: true };
-        }
 
         if (!room?.branches || room.branches.length === 0) {
             return { complete: true };

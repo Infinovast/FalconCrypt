@@ -12,6 +12,17 @@ export type RoomTuple = [name: string, eventType: string];
 
 export type ScrollType = "火球术" | "寒冰术" | "治疗术" | "隐身术";
 
+export type TrapType = "fire" | "acid" | "rock" | "spike" | "pit";
+
+export type CharacterHoverHint = {
+    trait: string;
+    skill: string;
+};
+export type TooltipContent = {
+    title: string;
+    detail: string;
+};
+
 export type CombatActionType = "attack" | "critical" | "skill" | "scroll";
 
 export type RoomEventType =
@@ -25,6 +36,33 @@ export type RoomEventType =
     | "forge_event"
     | "statue_event"
     | "mine_event";
+
+export type ActionDeltaResource =
+    | "hp"
+    | "defense"
+    | "defenseMax"
+    | "skillPoint"
+    | "food"
+    | "coin"
+    | "xp"
+    | "xpLevel"
+    | "extraAtk"
+    | "scroll";
+
+export type ActionDeltaHint = "plusplus" | "plusminus" | "plusmaybe";
+
+export interface ActionDeltaRange {
+    min: number;
+    max: number;
+}
+
+export interface ActionDeltaBadge {
+    resource: ActionDeltaResource;
+    amount?: number;
+    hint?: ActionDeltaHint;
+    range?: ActionDeltaRange;
+    label?: string;
+}
 
 export interface RoomNode {
     key: string;
@@ -54,6 +92,9 @@ export interface MapRoomView {
 export interface RoomAction {
     id: string;
     label: string;
+    displayLabel?: string;
+    costBadges?: ActionDeltaBadge[];
+    rewardBadges?: ActionDeltaBadge[];
     disabledReason?: string;
 }
 
@@ -76,6 +117,8 @@ export interface PlayerState {
     xpLevel: number;
     scroll: ScrollType | null;
     pendingScroll: ScrollType | null;
+    hasThornsArmor: boolean;
+    hasHeavyArmor: boolean;
 }
 
 export interface DungeonState {
@@ -90,10 +133,10 @@ export interface CombatState {
     monsterAtk: number;
     skillPoint: number;
     isBoss: boolean;
-    frozenEnemyTurns: number;
+    skipCounterattackOnce: boolean;
     tempExtraAtk: number;
     tempMonsterAtkDelta: number;
-    pendingFoodCost: number;
+    forgeUpgradeType: "thorns" | "heavy" | null;
 }
 
 export interface CombatActionResult {
