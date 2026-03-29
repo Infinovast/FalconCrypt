@@ -83,12 +83,21 @@ const getRoomIntroPalette = (kind: RoomIntroKind): [number, number, number] => {
     }
 };
 
-const getRoomIntroShape = (kind: RoomIntroKind): "diamond" | "beam" | "halo" => {
+const getRoomIntroShape = (
+    kind: RoomIntroKind,
+): "diamond" | "beam" | "halo" | "boss_sigil" | "branch_bonfire" | "shop_forge" => {
     switch (kind) {
         case "trap_event":
         case "monster_event":
             return "beam";
         case "boss_event":
+            return "boss_sigil";
+        case "branch_event":
+        case "bonfire_event":
+            return "branch_bonfire";
+        case "shop_event":
+        case "forge_event":
+            return "shop_forge";
         case "statue_event":
             return "halo";
         default:
@@ -194,6 +203,78 @@ export function drawRoomIntroOverlay(
         ctx.moveTo(centerX - core * 1.2, centerY + core * 1.3);
         ctx.lineTo(centerX + core * 1.45, centerY - core * 1.15);
         ctx.stroke();
+    } else if (shape === "boss_sigil") {
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${(frame.shimmerAlpha * 0.95).toFixed(3)})`;
+        ctx.lineWidth = lowFx ? 2 : 3;
+
+        // Outer ring with rotating notch for an unmistakable boss intro.
+        const ringRadius = core * 1.8;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, ringRadius, frame.progress * Math.PI * 2, frame.progress * Math.PI * 2 + Math.PI * 1.7);
+        ctx.stroke();
+
+        ctx.beginPath();
+        for (let i = 0; i < 5; i += 1) {
+            const angle = frame.progress * 0.8 + (Math.PI * 2 * i) / 5;
+            const outer = core * 1.25;
+            const inner = core * 0.55;
+            const px = centerX + Math.cos(angle) * outer;
+            const py = centerY + Math.sin(angle) * outer;
+            const qx = centerX + Math.cos(angle + Math.PI / 5) * inner;
+            const qy = centerY + Math.sin(angle + Math.PI / 5) * inner;
+            if (i === 0) ctx.moveTo(px, py);
+            ctx.lineTo(qx, qy);
+        }
+        ctx.closePath();
+        ctx.stroke();
+
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${(frame.shimmerAlpha * 0.38).toFixed(3)})`;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, core * 0.62, 0, Math.PI * 2);
+        ctx.fill();
+    } else if (shape === "branch_bonfire") {
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${(frame.shimmerAlpha * 0.82).toFixed(3)})`;
+        ctx.lineWidth = lowFx ? 2 : 3;
+
+        // Split path motif for branch/bonfire room entry.
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY + core * 1.35);
+        ctx.lineTo(centerX, centerY - core * 0.2);
+        ctx.lineTo(centerX - core * 1.05, centerY - core * 1.05);
+        ctx.moveTo(centerX, centerY - core * 0.2);
+        ctx.lineTo(centerX + core * 1.05, centerY - core * 1.05);
+        ctx.stroke();
+
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${(frame.shimmerAlpha * 0.48).toFixed(3)})`;
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY - core * 0.92);
+        ctx.lineTo(centerX + core * 0.42, centerY - core * 0.1);
+        ctx.lineTo(centerX, centerY + core * 0.25);
+        ctx.lineTo(centerX - core * 0.42, centerY - core * 0.1);
+        ctx.closePath();
+        ctx.fill();
+    } else if (shape === "shop_forge") {
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${(frame.shimmerAlpha * 0.84).toFixed(3)})`;
+        ctx.lineWidth = lowFx ? 2 : 3;
+
+        // Industrial bracket motif for shop/forge room entry.
+        const boxW = core * 1.9;
+        const boxH = core * 1.2;
+        const wobble = Math.sin(frame.progress * Math.PI * 4) * core * 0.08;
+
+        ctx.beginPath();
+        ctx.rect(centerX - boxW * 0.5, centerY - boxH * 0.5 + wobble, boxW, boxH);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(centerX - boxW * 0.35, centerY - boxH * 0.78 + wobble);
+        ctx.lineTo(centerX + boxW * 0.35, centerY - boxH * 0.78 + wobble);
+        ctx.stroke();
+
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${(frame.shimmerAlpha * 0.44).toFixed(3)})`;
+        ctx.beginPath();
+        ctx.rect(centerX - boxW * 0.18, centerY - boxH * 0.18 + wobble, boxW * 0.36, boxH * 0.36);
+        ctx.fill();
     } else if (shape === "halo") {
         ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${(frame.shimmerAlpha * 0.82).toFixed(3)})`;
         ctx.lineWidth = lowFx ? 2 : 3;

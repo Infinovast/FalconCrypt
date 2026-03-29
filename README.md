@@ -117,6 +117,21 @@ npm run preview
 - 通过从 `App.tsx` 传递的 `triggerKey`，触发战斗伤害的屏幕震动、资源变化的粒子脉冲（`combatAnimation` / `roomAnimation`）。
 - 保持接口黑盒化，可随时重构内部渲染引擎。
 
+- 房间和动画的对应关系如下：
+
+    | 房间名 | 事件类型 | 进房形态 |
+    | --- | --- | --- |
+    | 怪物 | monster_event | beam |
+    | 宝箱 | chest_event | diamond |
+    | 陷阱 | trap_event | beam |
+    | 商人 | shop_event | shop_forge |
+    | 篝火 | bonfire_event | branch_bonfire |
+    | 铸锻 | forge_event | shop_forge |
+    | 雕像 | statue_event | halo |
+    | 矿洞 | mine_event | diamond |
+    | BOSS | boss_event | boss_sigil |
+    | 分叉口 | branch_event | branch_bonfire |
+
 ### 4.4 `src/styles.css`
 
 负责视觉基调与响应式布局：
