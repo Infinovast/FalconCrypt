@@ -30,7 +30,7 @@ import type { ActionDeltaBadge, ActionDeltaHint, CharacterHoverHint, CharacterTu
 import type { ThresholdRule } from "./game/constants";
 import type { RoomEventType } from "./game/types";
 
-type Stage = "menu" | "character" | "explore" | "event" | "combat";
+type Stage = "menu" | "character" | "explore" | "event" | "combat" | "gameover";
 
 type ResourceSpendKey = "hp" | "defense" | "defenseMax" | "skillPoint" | "food" | "coin" | "scroll" | "extraAtk";
 
@@ -78,6 +78,14 @@ type IconStripResourceProps = {
 };
 
 type LogCategory = "room" | "combat" | "resource" | "system";
+type LogEntryView = {
+    id: string;
+    category: LogCategory;
+    text: string;
+    indexLabel: string;
+    emphasis?: string;
+    detail: string;
+};
 
 type CategorizedLog = {
     id: string;
@@ -260,6 +268,29 @@ const buildLogBuckets = (logs: string[]): Record<LogCategory, CategorizedLog[]> 
     });
 
     return initial;
+};
+
+const splitLogEntry = (text: string): { emphasis?: string; detail: string } => {
+    const normalized = text.trim();
+    const match = normalized.match(/^(.*?[：:])\s*(.+)$/);
+    if (match) {
+        return {
+            emphasis: match[1].trim(),
+            detail: match[2].trim(),
+        };
+    }
+    return { detail: normalized };
+};
+const buildLogEntryView = (entry: CategorizedLog, order: number): LogEntryView => {
+    const { emphasis, detail } = splitLogEntry(entry.text);
+    return {
+        id: entry.id,
+        category: entry.category,
+        text: entry.text,
+        indexLabel: (order + 1).toString().padStart(2, "0"),
+        emphasis,
+        detail,
+    };
 };
 
 const calcLevelClass = (ratio: number, threshold: ThresholdRule): string => {
@@ -813,6 +844,7 @@ function ProgressCompositeResource({ room, roomMax, floor, floorMax }: ProgressC
 }
 
 export function App(): JSX.Element {
+    const developerPanelDefaultPosition = { x: 24, y: 24 };
     const [stage, setStage] = useState<Stage>("menu");
     const [tick, setTick] = useState(0);
     const [showWelcomeFx, setShowWelcomeFx] = useState(false);
@@ -836,6 +868,8 @@ export function App(): JSX.Element {
     const [eventAwaitingLeave, setEventAwaitingLeave] = useState(false);
     const [buttonsAnimating, setButtonsAnimating] = useState(false);
     const [showDeveloperPanel, setShowDeveloperPanel] = useState(false);
+    const [developerPanelPosition, setDeveloperPanelPosition] = useState(developerPanelDefaultPosition);
+    const [developerPanelDragging, setDeveloperPanelDragging] = useState(false);
     const [hoveredSpendPreview, setHoveredSpendPreview] = useState<ResourceSpendPreview | null>(null);
     const [hoveredGainPreview, setHoveredGainPreview] = useState<ResourceGainPreview | null>(null);
     const [hoveredForgeHint, setHoveredForgeHint] = useState<ForgeHoverHint | null>(null);
@@ -849,6 +883,7 @@ export function App(): JSX.Element {
     const victoryFxTimerRef = useRef<number | null>(null);
     const prevStageRef = useRef<Stage>("menu");
     const developerPanelRef = useRef<HTMLElement | null>(null);
+    const developerPanelDragOffsetRef = useRef({ x: 0, y: 0 });
 
     const snapshot = gameState.snapshot;
     const resourceSnapshotRef = useRef({
@@ -942,6 +977,13 @@ export function App(): JSX.Element {
     const developerNextRoomType = gameState.getDeveloperNextRoomType();
     const developerNextRoomKey = gameState.getDeveloperNextRoomKey();
     const logBuckets = buildLogBuckets(snapshot.logs.slice(-48));
+    const logViews = LOG_SECTION_ORDER.reduce(
+        (acc, section) => {
+            acc[section] = logBuckets[section].map((entry, index) => buildLogEntryView(entry, index));
+            return acc;
+        },
+        { room: [], combat: [], resource: [], system: [] } as Record<LogCategory, LogEntryView[]>
+    );
     const thresholdRule = (rule: ThresholdRule): ThresholdRule => (stage === "menu" ? DISABLED_THRESHOLD_RULE : rule);
 
     const developerControls: DeveloperControl[] = [
@@ -964,6 +1006,29 @@ export function App(): JSX.Element {
     ];
 
     const refresh = () => setTick((v) => v + 1);
+
+    const currentStageLabel =
+        stage === "menu"
+            ? "待机"
+            : stage === "character"
+                ? "选角"
+                : stage === "explore"
+                    ? "探索"
+                    : stage === "event"
+                        ? "事件"
+                        : stage === "combat"
+                            ? "战斗"
+                            : "终止";
+    const currentFocusLabel = previewChar
+        ? previewChar[6]
+        : stage === "event" && activeEvent
+            ? gameState.getEventTitle(activeEvent)
+            : snapshot.combat.monsterName || "未锁定";
+    const menuHeroStats = [
+        { label: "地牢层数", value: `${FLOOR} 层` },
+        { label: "房间事件", value: "多分支事件" },
+        { label: "战斗风格", value: "文字策略" },
+    ];
 
     const adjustDeveloperScalar = (field: DeveloperScalarField, delta: number) => {
         gameState.adjustDeveloperScalar(field, delta);
@@ -1361,6 +1426,41 @@ export function App(): JSX.Element {
         return () => window.removeEventListener("wheel", blockPageWheel);
     }, [showDeveloperPanel]);
 
+    useEffect(() => {
+        if (!showDeveloperPanel || !developerPanelDragging) {
+            return;
+        }
+
+        const handlePointerMove = (event: PointerEvent) => {
+            const panel = developerPanelRef.current;
+            const panelWidth = panel?.offsetWidth ?? 320;
+            const panelHeight = panel?.offsetHeight ?? 480;
+            const nextX = event.clientX - developerPanelDragOffsetRef.current.x;
+            const nextY = event.clientY - developerPanelDragOffsetRef.current.y;
+            const maxX = Math.max(12, window.innerWidth - panelWidth - 12);
+            const maxY = Math.max(12, window.innerHeight - panelHeight - 12);
+
+            setDeveloperPanelPosition({
+                x: Math.min(Math.max(12, nextX), maxX),
+                y: Math.min(Math.max(12, nextY), maxY),
+            });
+        };
+
+        const handlePointerEnd = () => {
+            setDeveloperPanelDragging(false);
+        };
+
+        window.addEventListener("pointermove", handlePointerMove);
+        window.addEventListener("pointerup", handlePointerEnd);
+        window.addEventListener("pointercancel", handlePointerEnd);
+
+        return () => {
+            window.removeEventListener("pointermove", handlePointerMove);
+            window.removeEventListener("pointerup", handlePointerEnd);
+            window.removeEventListener("pointercancel", handlePointerEnd);
+        };
+    }, [showDeveloperPanel, developerPanelDragging]);
+
     const triggerWelcomeFx = () => {
         const buttonRect = startButtonRef.current?.getBoundingClientRect();
         if (buttonRect) {
@@ -1388,6 +1488,24 @@ export function App(): JSX.Element {
         }
         prevStageRef.current = stage;
     }, [stage]);
+
+    const handleDeveloperPanelPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
+        if (event.pointerType === "mouse" && event.button !== 0) {
+            return;
+        }
+
+        const panelRect = developerPanelRef.current?.getBoundingClientRect();
+        if (!panelRect) {
+            return;
+        }
+
+        developerPanelDragOffsetRef.current = {
+            x: event.clientX - panelRect.left,
+            y: event.clientY - panelRect.top,
+        };
+        setDeveloperPanelDragging(true);
+        event.currentTarget.setPointerCapture(event.pointerId);
+    };
 
     useEffect(() => {
         clearHoveredResourcePreview();
@@ -1513,7 +1631,9 @@ export function App(): JSX.Element {
             setActiveRoomKey(null);
             setActiveEvent(null);
             setPendingBossBonusChest(false);
-            setStage("menu");
+            setEventAwaitingLeave(false);
+            setStage("gameover");
+            refresh();
             return;
         }
 
@@ -1549,6 +1669,17 @@ export function App(): JSX.Element {
         setActiveRoomKey(null);
         setPendingBossBonusChest(false);
         setStage("character");
+        refresh();
+    };
+
+    const returnToMenu = () => {
+        setHoveredChar(null);
+        setActiveEvent(null);
+        setActiveRoomKey(null);
+        setPendingBossBonusChest(false);
+        setEventAwaitingLeave(false);
+        clearHoveredResourcePreview();
+        setStage("menu");
         refresh();
     };
 
@@ -1734,7 +1865,8 @@ export function App(): JSX.Element {
             gameState.finishCombat(false);
             setActiveEvent(null);
             setPendingBossBonusChest(false);
-            setStage("menu");
+            setEventAwaitingLeave(false);
+            setStage("gameover");
         }
         refresh();
     };
@@ -1753,7 +1885,10 @@ export function App(): JSX.Element {
     }, []);
 
     return (
-        <main className="shell">
+        <main className={`shell stage-shell stage-${stage}`}>
+            <div className="shell-ornament shell-ornament-a" aria-hidden="true" />
+            <div className="shell-ornament shell-ornament-b" aria-hidden="true" />
+            <div className="shell-grain" aria-hidden="true" />
             {showVictoryFx && (
                 <div key={victoryFxKey} className="victory-fx" role="status" aria-live="assertive">
                     <div className="victory-fx-backdrop" aria-hidden="true" />
@@ -1832,462 +1967,539 @@ export function App(): JSX.Element {
                     </div>
                 </div>
             )}
-            <section className="left-panel">
-                <div className="map-canvas-row">
-                    <div>
-                        <header className="panel-title">地图</header>
-                        <div className="map-panel">
-                            <div className="map-floor">
-                                <div className="map-floor-title">当前层 B{snapshot.dungeon.floor}</div>
-                                <div className="map-room-list">
-                                    {currentFloorMap.map((room) => (
-                                        <div key={room.key} className="map-room-node">
-                                            <span
-                                                className={`map-room ${room.revealed ? "is-revealed" : ""} ${room.isCurrent ? "is-current" : ""} ${room.reorderedByBranch ? "is-reordered" : ""}`}
-                                            >
-                                                {room.floor}-{room.index} {room.display}
-                                            </span>
-                                            {room.chosenBranchName && (
-                                                <>
-                                                    <span className="map-branch-link" aria-hidden="true" />
-                                                    <span className="map-room map-room-branch is-revealed">{room.chosenBranchName}</span>
-                                                </>
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-
-                            <div className="map-floor">
-                                <div className="map-floor-title">下一层 B{nextFloor}</div>
-                                <div className="map-room-list">
-                                    {nextFloorMap.map((room) => (
-                                        <div key={room.key} className="map-room-node">
-                                            <span className={`map-room ${room.revealed ? "is-revealed" : ""} ${room.reorderedByBranch ? "is-reordered" : ""}`}>
-                                                {room.floor}-{room.index} {room.display}
-                                            </span>
-                                            {room.chosenBranchName && (
-                                                <>
-                                                    <span className="map-branch-link" aria-hidden="true" />
-                                                    <span className="map-room map-room-branch is-revealed">{room.chosenBranchName}</span>
-                                                </>
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
+            {stage === "menu" ? (
+                <section className="left-panel stage-panel-main menu-only-panel menu-stage-panel">
+                    <section className="menu-hero" aria-label="首页概览">
+                        <div className="menu-hero-copy">
+                            <span className="menu-hero-kicker">FalconCrypt</span>
+                            <h1 className="menu-hero-title">
+                                遗迹不是地图，
+                                <br />
+                                是一台会吞噬判断的仪表盘。
+                            </h1>
+                            <p className="menu-hero-text">
+                                文字冒险为核心，围绕地图预判、资源波动与房间事件，可视化地向地牢深处推进。
+                            </p>
+                            <div className="menu-hero-actions">
+                                <button ref={startButtonRef} data-action-id="start-new-run" onClick={() => triggerAction("start-new-run", startNewRun)}>
+                                    进入遗迹
+                                </button>
+                                <span className="menu-hero-caption">先选角色，再进入四层地牢，围绕资源和路径做持续取舍。</span>
                             </div>
                         </div>
-                    </div>
-                    <div className="map-canvas-box">
-                        <header className="panel-title">动画</header>
-                        <GameCanvas
-                            dangerLevel={dangerLevel}
-                            combatIntroTriggerKey={combatIntroTriggerKey}
-                            combatActionTriggerKey={combatActionTriggerKey}
-                            combatActionType={combatActionType}
-                            roomIntroTriggerKey={roomIntroTriggerKey}
-                            roomIntroType={roomIntroType}
-                            resourcePulseTriggerKey={resourcePulseTriggerKey}
-                            resourcePulseTone={resourcePulseTone}
-                            resourcePulsePower={resourcePulsePower}
-                        />
-                    </div>
-                </div>
-
-                <header className="panel-title">日志</header>
-                <div className="log-grid" aria-label="按类别分组日志">
-                    {LOG_SECTION_ORDER.map((section) => (
-                        <section key={section} className={`log-lane log-lane-${section}`}>
-                            <header className="log-lane-head">
-                                <span className="log-lane-title">{LOG_SECTION_TITLES[section]}</span>
-                                <span className="log-lane-count">{logBuckets[section].length}</span>
-                            </header>
-                            <div className="log-lane-list">
-                                {logBuckets[section].length === 0 ? (
-                                    <div className="log-empty">暂无</div>
-                                ) : (
-                                    logBuckets[section].map((entry) => (
-                                        <div key={entry.id} className={`log-entry log-entry-${entry.category}`}>
-                                            {entry.text}
+                        <div className="menu-hero-sigil" aria-hidden="true">
+                            <div className="menu-hero-sigil-core" />
+                            <div className="menu-hero-sigil-ring menu-hero-sigil-ring-outer" />
+                            <div className="menu-hero-sigil-ring menu-hero-sigil-ring-mid" />
+                            <div className="menu-hero-sigil-ring menu-hero-sigil-ring-inner" />
+                            <div className="menu-hero-sigil-axis menu-hero-sigil-axis-a" />
+                            <div className="menu-hero-sigil-axis menu-hero-sigil-axis-b" />
+                        </div>
+                        <div className="menu-hero-metrics">
+                            {menuHeroStats.map((item) => (
+                                <div key={item.label} className="menu-hero-metric">
+                                    <span>{item.label}</span>
+                                    <strong>{item.value}</strong>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+                </section>
+            ) : (
+                <>
+                    <section className="left-panel stage-panel-main">
+                        <div className="map-canvas-row">
+                            <div>
+                                <header className="panel-title">地图</header>
+                                <div className="map-panel">
+                                    <div className="map-floor">
+                                        <div className="map-floor-title">当前层 B{snapshot.dungeon.floor}</div>
+                                        <div className="map-room-list" aria-label={`当前层 B${snapshot.dungeon.floor} 路径`}>
+                                            {currentFloorMap.map((room) => (
+                                                <div key={room.key} className="map-room-node">
+                                                    <span
+                                                        className={`map-room ${room.revealed ? "is-revealed" : ""} ${room.isCurrent ? "is-current" : ""} ${room.reorderedByBranch ? "is-reordered" : ""}`}
+                                                    >
+                                                        {room.floor}-{room.index} {room.display}
+                                                    </span>
+                                                    {room.chosenBranchName && (
+                                                        <>
+                                                            <span className="map-branch-link" aria-hidden="true" />
+                                                            <span className="map-room map-room-branch is-revealed">{room.chosenBranchName}</span>
+                                                        </>
+                                                    )}
+                                                </div>
+                                            ))}
                                         </div>
-                                    ))
-                                )}
+                                    </div>
+
+                                    <div className="map-floor">
+                                        <div className="map-floor-title">下一层 B{nextFloor}</div>
+                                        <div className="map-room-list" aria-label={`下一层 B${nextFloor} 预判`}>
+                                            {nextFloorMap.map((room) => (
+                                                <div key={room.key} className="map-room-node">
+                                                    <span className={`map-room ${room.revealed ? "is-revealed" : ""} ${room.reorderedByBranch ? "is-reordered" : ""}`}>
+                                                        {room.floor}-{room.index} {room.display}
+                                                    </span>
+                                                    {room.chosenBranchName && (
+                                                        <>
+                                                            <span className="map-branch-link" aria-hidden="true" />
+                                                            <span className="map-room map-room-branch is-revealed">{room.chosenBranchName}</span>
+                                                        </>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
-                        </section>
-                    ))}
-                </div>
-                <div className="actions" ref={actionsRef}>
-                    {pendingScroll ? (
-                        <>
-                            <button data-action-id="pending-scroll-accept" onClick={() => triggerAction("pending-scroll-accept", () => resolvePendingScroll(true))}>
-                                替换为 {pendingScroll}
-                            </button>
-                            <button data-action-id="pending-scroll-keep" onClick={() => triggerAction("pending-scroll-keep", () => resolvePendingScroll(false))}>
-                                保留当前卷轴
-                            </button>
-                        </>
-                    ) : (
-                        <>
-                            {stage === "menu" && (
-                                <button ref={startButtonRef} data-action-id="start-new-run" onClick={() => triggerAction("start-new-run", startNewRun)}>
-                                    开始冒险
-                                </button>
-                            )}
-                            {stage === "character" &&
-                                charOptions.map((c, i) => {
-                                    const hint = getCharacterHoverHint(c);
-                                    return (
-                                        <button
-                                            key={c[0]}
-                                            className="character-option-btn"
-                                            data-action-id={`character-${i}`}
-                                            onClick={() => triggerAction(`character-${i}`, () => confirmCharacter(i))}
-                                            onMouseEnter={() => setHoveredChar(c)}
-                                            onMouseLeave={() => setHoveredChar(null)}
-                                            onFocus={() => setHoveredChar(c)}
-                                            onBlur={() => setHoveredChar(null)}
-                                        >
-                                            <span className="character-option-label">
-                                                选择 {c[0]} / {c[6]}
-                                            </span>
-                                            <span className="character-option-tip" aria-hidden="true">
-                                                <span>{hint.trait}</span>
-                                                <span>{hint.skill}</span>
-                                            </span>
-                                        </button>
-                                    );
-                                })}
-                            {stage === "explore" && (
+                            <div className="map-canvas-box">
+                                <header className="panel-title">动画</header>
+                                <GameCanvas
+                                    dangerLevel={dangerLevel}
+                                    combatIntroTriggerKey={combatIntroTriggerKey}
+                                    combatActionTriggerKey={combatActionTriggerKey}
+                                    combatActionType={combatActionType}
+                                    roomIntroTriggerKey={roomIntroTriggerKey}
+                                    roomIntroType={roomIntroType}
+                                    resourcePulseTriggerKey={resourcePulseTriggerKey}
+                                    resourcePulseTone={resourcePulseTone}
+                                    resourcePulsePower={resourcePulsePower}
+                                />
+                            </div>
+                        </div>
+
+                        <header className="panel-title">日志</header>
+                        <div className="log-grid" aria-label="按类别分组日志">
+                            {LOG_SECTION_ORDER.map((section) => (
+                                <section key={section} className={`log-lane log-lane-${section} ${logViews[section].length > 3 ? "is-scrollable" : ""}`}>
+                                    <header className="log-lane-head">
+                                        <div>
+                                            <span className="log-lane-kicker">{section.toUpperCase()}</span>
+                                            <span className="log-lane-title">{LOG_SECTION_TITLES[section]}</span>
+                                        </div>
+                                        <span className="log-lane-count">{logViews[section].length}</span>
+                                    </header>
+                                    <div className={`log-lane-list ${logViews[section].length > 3 ? "is-scrollable" : ""}`}>
+                                        {logViews[section].length === 0 ? (
+                                            <div className="log-empty">
+                                                <span>暂无记录</span>
+                                                <strong>该轨道还没有新的事件回波。</strong>
+                                            </div>
+                                        ) : (
+                                            logViews[section].map((entry) => (
+                                                <article key={entry.id} className={`log-entry log-entry-${entry.category}`}>
+                                                    <span className="log-entry-index">{entry.indexLabel}</span>
+                                                    <span className="log-entry-line">
+                                                        {entry.detail ? (
+                                                            <>
+                                                                <strong className="log-entry-emphasis">{entry.emphasis}</strong>
+                                                                <span className="log-entry-detail">{entry.detail}</span>
+                                                            </>
+                                                        ) : (
+                                                            <strong className="log-entry-emphasis log-entry-detail-only">{entry.emphasis}</strong>
+                                                        )}
+                                                    </span>
+                                                </article>
+                                            ))
+                                        )}
+                                    </div>
+                                </section>
+                            ))}
+                        </div>
+                        <div className="actions" ref={actionsRef}>
+                            {pendingScroll ? (
                                 <>
-                                    <button data-action-id="enter-room" onClick={() => triggerAction("enter-room", enterRoom)}>
-                                        {exploreEnterLabel}
+                                    <button data-action-id="pending-scroll-accept" onClick={() => triggerAction("pending-scroll-accept", () => resolvePendingScroll(true))}>
+                                        替换为 {pendingScroll}
                                     </button>
-                                    {snapshot.player.scroll === "治疗术" && (
-                                        <button
-                                            className="scroll-action-btn"
-                                            data-action-id="explore-heal-scroll"
-                                            onClick={() => triggerAction("explore-heal-scroll", useHealScrollInExplore, false)}
-                                            onMouseEnter={applyExploreHealScrollPreview}
-                                            onMouseLeave={clearHoveredResourcePreview}
-                                            onFocus={applyExploreHealScrollPreview}
-                                            onBlur={clearHoveredResourcePreview}
-                                        >
-                                            使用治疗术
-                                            {renderScrollTooltip("治疗术")}
+                                    <button data-action-id="pending-scroll-keep" onClick={() => triggerAction("pending-scroll-keep", () => resolvePendingScroll(false))}>
+                                        保留当前卷轴
+                                    </button>
+                                </>
+                            ) : (
+                                <>
+                                    {stage === "character" &&
+                                        charOptions.map((c, i) => {
+                                            const hint = getCharacterHoverHint(c);
+                                            return (
+                                                <button
+                                                    key={c[0]}
+                                                    className="character-option-btn"
+                                                    data-action-id={`character-${i}`}
+                                                    onClick={() => triggerAction(`character-${i}`, () => confirmCharacter(i))}
+                                                    onMouseEnter={() => setHoveredChar(c)}
+                                                    onMouseLeave={() => setHoveredChar(null)}
+                                                    onFocus={() => setHoveredChar(c)}
+                                                    onBlur={() => setHoveredChar(null)}
+                                                >
+                                                    <span className="character-option-label">
+                                                        选择 {c[0]} / {c[6]}
+                                                    </span>
+                                                    <span className="character-option-tip" aria-hidden="true">
+                                                        <span>{hint.trait}</span>
+                                                        <span>{hint.skill}</span>
+                                                    </span>
+                                                </button>
+                                            );
+                                        })}
+                                    {stage === "explore" && (
+                                        <>
+                                            <button data-action-id="enter-room" onClick={() => triggerAction("enter-room", enterRoom)}>
+                                                {exploreEnterLabel}
+                                            </button>
+                                            {snapshot.player.scroll === "治疗术" && (
+                                                <button
+                                                    className="scroll-action-btn"
+                                                    data-action-id="explore-heal-scroll"
+                                                    onClick={() => triggerAction("explore-heal-scroll", useHealScrollInExplore, false)}
+                                                    onMouseEnter={applyExploreHealScrollPreview}
+                                                    onMouseLeave={clearHoveredResourcePreview}
+                                                    onFocus={applyExploreHealScrollPreview}
+                                                    onBlur={clearHoveredResourcePreview}
+                                                >
+                                                    使用治疗术
+                                                    {renderScrollTooltip("治疗术")}
+                                                </button>
+                                            )}
+                                        </>
+                                    )}
+                                    {stage === "event" &&
+                                        activeEvent &&
+                                        (activeEvent === "shop_event" && shopInventory ? (
+                                            <>
+                                                <div className="shop-board">
+                                                    <div className="shop-section">
+                                                        <div className="shop-title">买入</div>
+                                                        <div className="shop-list">
+                                                            {shopInventory.buy.map((action) => (
+                                                                <button
+                                                                    key={action.id}
+                                                                    data-action-id={action.id}
+                                                                    onClick={() => triggerAction(action.id, () => executeRoomAction(action.id), false)}
+                                                                    disabled={Boolean(action.disabledReason)}
+                                                                    title={action.disabledReason}
+                                                                    {...getSpendPreviewHandlers(action)}
+                                                                >
+                                                                    <ActionButtonContent action={action} />
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                    <div className="shop-section">
+                                                        <div className="shop-title">卖出</div>
+                                                        <div className="shop-list">
+                                                            {shopInventory.sell.map((action) => (
+                                                                <button
+                                                                    key={action.id}
+                                                                    data-action-id={action.id}
+                                                                    onClick={() => triggerAction(action.id, () => executeRoomAction(action.id), false)}
+                                                                    disabled={Boolean(action.disabledReason)}
+                                                                    title={action.disabledReason}
+                                                                    {...getSpendPreviewHandlers(action)}
+                                                                >
+                                                                    <ActionButtonContent action={action} />
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                {gameState
+                                                    .getRoomActions(activeEvent)
+                                                    .filter((action) => action.id === "leave")
+                                                    .map((action) => (
+                                                        <button
+                                                            key={action.id}
+                                                            data-action-id={action.id}
+                                                            onClick={() => triggerAction(action.id, leaveCurrentEvent)}
+                                                            disabled={Boolean(action.disabledReason)}
+                                                            title={action.disabledReason}
+                                                            {...getSpendPreviewHandlers(action)}
+                                                        >
+                                                            <ActionButtonContent action={action} />
+                                                        </button>
+                                                    ))}
+                                            </>
+                                        ) : (
+                                            <>
+                                                {activeEvent === "mine_event" && (
+                                                    <div className="event-tip">提示：本房间只要执行过挖掘，离开后将跳过通用房间结算。</div>
+                                                )}
+                                                {activeEvent === "forge_event" && hoveredForgeHint && (
+                                                    <div className="forge-hover-tip" aria-hidden="true">
+                                                        <span>{hoveredForgeHint.title}</span>
+                                                        <span>{hoveredForgeHint.detail}</span>
+                                                    </div>
+                                                )}
+                                                {gameState
+                                                    .getRoomActions(activeEvent)
+                                                    .filter((action) => {
+                                                        if (eventAwaitingLeave) return action.id === "leave";
+                                                        if (
+                                                            (activeEvent === "chest_event" ||
+                                                                activeEvent === "trap_event" ||
+                                                                activeEvent === "bonfire_event") &&
+                                                            action.id === "leave"
+                                                        ) {
+                                                            return false;
+                                                        }
+                                                        return true;
+                                                    })
+                                                    .map((action) => (
+                                                        <button
+                                                            key={action.id}
+                                                            className={
+                                                                action.id.startsWith("forge_armor_") ||
+                                                                    (activeEvent === "trap_event" && (action.id === "disarm" || action.id === "rush")) ||
+                                                                    (activeEvent === "statue_event" && (action.id === "pray" || action.id === "offer"))
+                                                                    ? "scroll-action-btn"
+                                                                    : undefined
+                                                            }
+                                                            data-action-id={action.id}
+                                                            onClick={() =>
+                                                                action.id === "leave"
+                                                                    ? triggerAction(action.id, leaveCurrentEvent)
+                                                                    : triggerAction(action.id, () => executeRoomAction(action.id))
+                                                            }
+                                                            disabled={Boolean(action.disabledReason)}
+                                                            title={action.disabledReason}
+                                                            {...getSpendPreviewHandlers(action)}
+                                                        >
+                                                            <ActionButtonContent action={action} />
+                                                            {activeEvent === "trap_event" ? renderTrapActionTooltip(action.id) : null}
+                                                            {activeEvent === "statue_event" ? renderStatueActionTooltip(action.id) : null}
+                                                            {activeEvent === "forge_event" && forgeUpgradeType && action.id === `forge_armor_${forgeUpgradeType}` && (
+                                                                <span className="character-option-tip" aria-hidden="true">
+                                                                    <span>{FORGE_HOVER_HINTS[forgeUpgradeType].title}</span>
+                                                                    <span>{FORGE_HOVER_HINTS[forgeUpgradeType].detail}</span>
+                                                                </span>
+                                                            )}
+                                                        </button>
+                                                    ))}
+                                            </>
+                                        ))}
+                                    {stage === "combat" &&
+                                        gameState.getCombatActions().map((action) => (
+                                            <button
+                                                key={action.id}
+                                                className={action.id === "scroll" || action.id === "skill" || action.id === "critical" ? "scroll-action-btn" : undefined}
+                                                data-action-id={action.id}
+                                                onClick={() => triggerAction(action.id, () => handleCombatAction(action.id as CombatActionType), false)}
+                                                disabled={Boolean(action.disabledReason)}
+                                                title={action.disabledReason}
+                                                {...getSpendPreviewHandlers(action)}
+                                            >
+                                                <ActionButtonContent action={action} />
+                                                {action.id === "critical" ? renderCriticalTooltip() : null}
+                                                {action.id === "scroll" ? renderScrollTooltip(snapshot.player.scroll) : null}
+                                                {action.id === "skill" ? renderSkillTooltip(snapshot.player.character) : null}
+                                            </button>
+                                        ))}
+                                    {stage === "gameover" && (
+                                        <button data-action-id="return-menu" onClick={() => triggerAction("return-menu", returnToMenu)}>
+                                            返回主页
                                         </button>
                                     )}
                                 </>
                             )}
-                            {stage === "event" &&
-                                activeEvent &&
-                                (activeEvent === "shop_event" && shopInventory ? (
-                                    <>
-                                        <div className="shop-board">
-                                            <div className="shop-section">
-                                                <div className="shop-title">买入</div>
-                                                <div className="shop-list">
-                                                    {shopInventory.buy.map((action) => (
-                                                        <button
-                                                            key={action.id}
-                                                            data-action-id={action.id}
-                                                            onClick={() => triggerAction(action.id, () => executeRoomAction(action.id), false)}
-                                                            disabled={Boolean(action.disabledReason)}
-                                                            title={action.disabledReason}
-                                                            {...getSpendPreviewHandlers(action)}
-                                                        >
-                                                            <ActionButtonContent action={action} />
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                            <div className="shop-section">
-                                                <div className="shop-title">卖出</div>
-                                                <div className="shop-list">
-                                                    {shopInventory.sell.map((action) => (
-                                                        <button
-                                                            key={action.id}
-                                                            data-action-id={action.id}
-                                                            onClick={() => triggerAction(action.id, () => executeRoomAction(action.id), false)}
-                                                            disabled={Boolean(action.disabledReason)}
-                                                            title={action.disabledReason}
-                                                            {...getSpendPreviewHandlers(action)}
-                                                        >
-                                                            <ActionButtonContent action={action} />
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        </div>
-                                        {gameState
-                                            .getRoomActions(activeEvent)
-                                            .filter((action) => action.id === "leave")
-                                            .map((action) => (
-                                                <button
-                                                    key={action.id}
-                                                    data-action-id={action.id}
-                                                    onClick={() => triggerAction(action.id, leaveCurrentEvent)}
-                                                    disabled={Boolean(action.disabledReason)}
-                                                    title={action.disabledReason}
-                                                    {...getSpendPreviewHandlers(action)}
-                                                >
-                                                    <ActionButtonContent action={action} />
-                                                </button>
-                                            ))}
-                                    </>
-                                ) : (
-                                    <>
-                                        {activeEvent === "mine_event" && (
-                                            <div className="event-tip">提示：本房间只要执行过挖掘，离开后将跳过通用房间结算。</div>
-                                        )}
-                                        {activeEvent === "forge_event" && hoveredForgeHint && (
-                                            <div className="forge-hover-tip" aria-hidden="true">
-                                                <span>{hoveredForgeHint.title}</span>
-                                                <span>{hoveredForgeHint.detail}</span>
-                                            </div>
-                                        )}
-                                        {gameState
-                                            .getRoomActions(activeEvent)
-                                            .filter((action) => {
-                                                if (eventAwaitingLeave) return action.id === "leave";
-                                                if (
-                                                    (activeEvent === "chest_event" ||
-                                                        activeEvent === "trap_event" ||
-                                                        activeEvent === "bonfire_event") &&
-                                                    action.id === "leave"
-                                                ) {
-                                                    return false;
-                                                }
-                                                return true;
-                                            })
-                                            .map((action) => (
-                                                <button
-                                                    key={action.id}
-                                                    className={
-                                                        action.id.startsWith("forge_armor_") ||
-                                                            (activeEvent === "trap_event" && (action.id === "disarm" || action.id === "rush")) ||
-                                                            (activeEvent === "statue_event" && (action.id === "pray" || action.id === "offer"))
-                                                            ? "scroll-action-btn"
-                                                            : undefined
-                                                    }
-                                                    data-action-id={action.id}
-                                                    onClick={() =>
-                                                        action.id === "leave"
-                                                            ? triggerAction(action.id, leaveCurrentEvent)
-                                                            : triggerAction(action.id, () => executeRoomAction(action.id))
-                                                    }
-                                                    disabled={Boolean(action.disabledReason)}
-                                                    title={action.disabledReason}
-                                                    {...getSpendPreviewHandlers(action)}
-                                                >
-                                                    <ActionButtonContent action={action} />
-                                                    {activeEvent === "trap_event" ? renderTrapActionTooltip(action.id) : null}
-                                                    {activeEvent === "statue_event" ? renderStatueActionTooltip(action.id) : null}
-                                                    {activeEvent === "forge_event" && forgeUpgradeType && action.id === `forge_armor_${forgeUpgradeType}` && (
-                                                        <span className="character-option-tip" aria-hidden="true">
-                                                            <span>{FORGE_HOVER_HINTS[forgeUpgradeType].title}</span>
-                                                            <span>{FORGE_HOVER_HINTS[forgeUpgradeType].detail}</span>
-                                                        </span>
-                                                    )}
-                                                </button>
-                                            ))}
-                                    </>
-                                ))}
-                            {stage === "combat" &&
-                                gameState.getCombatActions().map((action) => (
-                                    <button
-                                        key={action.id}
-                                        className={action.id === "scroll" || action.id === "skill" || action.id === "critical" ? "scroll-action-btn" : undefined}
-                                        data-action-id={action.id}
-                                        onClick={() => triggerAction(action.id, () => handleCombatAction(action.id as CombatActionType), false)}
-                                        disabled={Boolean(action.disabledReason)}
-                                        title={action.disabledReason}
-                                        {...getSpendPreviewHandlers(action)}
-                                    >
-                                        <ActionButtonContent action={action} />
-                                        {action.id === "critical" ? renderCriticalTooltip() : null}
-                                        {action.id === "scroll" ? renderScrollTooltip(snapshot.player.scroll) : null}
-                                        {action.id === "skill" ? renderSkillTooltip(snapshot.player.character) : null}
-                                    </button>
-                                ))}
-                        </>
-                    )}
-                </div>
-            </section>
-
-            <div className={`right-side-cluster ${showDeveloperPanel ? "has-developer-panel" : ""}`}>
-                <section className="right-panel">
-                    <header className="panel-title">状态</header>
-                    <div className="status-overview">
-                        <div className="overview-chip">
-                            <span>阶段</span>
-                            <strong>{stage}</strong>
-                        </div>
-                        <div className="overview-chip">
-                            <span>角色</span>
-                            <strong>{displayCharacter?.[0] ?? "-"}</strong>
-                        </div>
-                        <div className="overview-chip">
-                            <span>{previewChar ? "技能" : stage === "event" ? "事件" : "怪物"}</span>
-                            <strong>
-                                {previewChar
-                                    ? previewChar[6]
-                                    : stage === "event" && activeEvent
-                                        ? gameState.getEventTitle(activeEvent)
-                                        : snapshot.combat.monsterName || "-"}
-                            </strong>
-                        </div>
-                        <div className="overview-chip">
-                            <span>卷轴</span>
-                            <strong className={(hoveredSpendPreview?.scroll ?? 0) > 0 ? "scroll-preview consume-pulse" : "scroll-preview"}>{displayScroll}</strong>
-                        </div>
-                        <div className="overview-chip">
-                            <span>攻击</span>
-                            <strong className="atk-line">
-                                <span className="atk-main">[{atkMin}~{atkMax}]</span>
-                                {displayExtraAtk > 0 ? (
-                                    <span className={`atk-bonus ${hasTempExtraAtkInDisplay ? "atk-bonus-temp" : ""}`}>+{displayExtraAtk}</span>
-                                ) : (
-                                    ""
-                                )}
-                                {hoveredGainPreview?.extraAtk && (
-                                    <span
-                                        className={`atk-gain-hint ${hoveredGainPreview.extraAtk === "plusminus" ? "is-mixed" : hoveredGainPreview.extraAtk === "plusmaybe" ? "is-maybe" : ""}`}
-                                    >
-                                        {gainHintText(hoveredGainPreview.extraAtk)}
-                                    </span>
-                                )}
-                            </strong>
-                        </div>
-                    </div>
-
-                    <div className="resource-stack">
-                        <SegmentedResource
-                            icon="❤"
-                            label="生命"
-                            value={displayHp}
-                            max={playerHpMax}
-                            segments={hpSegments}
-                            consumeCount={hoveredSpendPreview?.hp ?? 0}
-                            gainHint={hoveredGainPreview?.hp}
-                            tone="hp"
-                            threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.hp)}
-                        />
-                        <SegmentedResource
-                            valuePrefix={armorEffectStars}
-                            icon="🛡"
-                            label="护甲"
-                            value={displayDefense}
-                            max={defenseMax}
-                            displayValue={defenseDisplayValue}
-                            segments={defSegments}
-                            consumeCount={hoveredSpendPreview?.defense ?? 0}
-                            gainHint={hoveredGainPreview?.defense}
-                            secondaryGainHint={hoveredGainPreview?.defenseMax}
-                            secondaryGainHintPrefix="Max"
-                            tone="shield"
-                            threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.shield)}
-                        />
-                        {stage === "combat" && (
-                            <IconStripResource
-                                icon="✦"
-                                label="技能点"
-                                value={snapshot.combat.skillPoint}
-                                unit={1}
-                                maxValue={12}
-                                consumeCount={hoveredSpendPreview?.skillPoint ?? 0}
-                                gainHint={hoveredGainPreview?.skillPoint}
-                                tone="path"
-                                threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.path)}
-                            />
-                        )}
-                        <IconStripResource
-                            icon="🍖"
-                            label="食物"
-                            value={displayFood}
-                            unit={1}
-                            maxValue={foodMax}
-                            segments={foodSegments}
-                            consumeCount={hoveredSpendPreview?.food ?? 0}
-                            gainHint={hoveredGainPreview?.food}
-                            tone="food"
-                            threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.food)}
-                        />
-                        <IconStripResource
-                            icon="🪙"
-                            label="金币"
-                            value={displayCoin}
-                            unit={1}
-                            maxValue={coinMax}
-                            segments={coinSegments}
-                            consumeCount={hoveredSpendPreview?.coin ?? 0}
-                            gainHint={hoveredGainPreview?.coin}
-                            tone="coin"
-                            threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.coin)}
-                        />
-                        {stage === "combat" && (
-                            <MonsterCompositeResource
-                                hp={snapshot.combat.monsterHp || 0}
-                                hpMax={monsterMax}
-                                atk={effectiveMonsterAtk}
-                                atkMax={monsterAtkMax}
-                            />
-                        )}
-                        <XpCompositeResource
-                            xp={snapshot.player.xp}
-                            xpMax={XP_MAX}
-                            xpLevel={snapshot.player.xpLevel}
-                            xpGainHint={hoveredGainPreview?.xp}
-                            levelGainHint={hoveredGainPreview?.xpLevel}
-                        />
-                        <ProgressCompositeResource room={snapshot.dungeon.roomIdx} roomMax={roomMax} floor={snapshot.dungeon.floor} floorMax={floorMax} />
-                    </div>
-                </section>
-
-                {showDeveloperPanel && (
-                    <section className="developer-panel" ref={developerPanelRef} aria-label="开发者面板">
-                        <header className="developer-panel-head">
-                            <div>
-                                <div className="developer-panel-kicker">开发者面板</div>
-                                <strong>滚轮调值</strong>
-                            </div>
-                            <span className="developer-panel-shortcut">{DEV_PANEL_TOGGLE}</span>
-                        </header>
-                        <div className="developer-panel-note">将鼠标移到条目上滚动即可增减。隐藏项也会显示在这里。</div>
-                        <div className="developer-control-list">
-                            {developerControls.map((control) => (
-                                <button
-                                    key={control.key}
-                                    type="button"
-                                    className={`developer-control ${control.hidden ? "is-hidden-field" : ""}`}
-                                    onWheel={(event) => handleDeveloperWheel(event, control.key)}
-                                >
-                                    <span className="developer-control-label">{control.label}</span>
-                                    <strong className="developer-control-value">{control.value}</strong>
-                                </button>
-                            ))}
-                        </div>
-                        <div className="developer-next-room">
-                            <div className="developer-next-room-head">
-                                <span>下个房间</span>
-                                <strong>{developerNextRoomKey ?? "无"}</strong>
-                            </div>
-                            <div className="developer-room-type-grid">
-                                {DEV_ROOM_TYPE_OPTIONS.map((eventType) => (
-                                    <button
-                                        key={eventType}
-                                        type="button"
-                                        className={`developer-room-type ${developerNextRoomType === eventType ? "is-active" : ""}`}
-                                        onClick={() => handleDeveloperRoomTypeChange(eventType)}
-                                        disabled={!developerNextRoomKey}
-                                    >
-                                        {DEV_ROOM_TYPE_LABELS[eventType]}
-                                    </button>
-                                ))}
-                            </div>
                         </div>
                     </section>
-                )}
-            </div>
+
+                    <div className="right-side-cluster">
+                        <section className="right-panel stage-panel-side">
+                            <section className="status-hero" aria-label="状态概览">
+                                <div className="status-hero-main">
+                                    <span className="status-hero-kicker">运行状态</span>
+                                    <div className="status-hero-value-row">
+                                        <strong className="status-hero-stage">{currentStageLabel}</strong>
+                                        <span className="status-hero-dot" aria-hidden="true" />
+                                        <span className="status-hero-focus">{currentFocusLabel}</span>
+                                    </div>
+                                </div>
+                                <div className="status-hero-badge">
+                                    <span>危险</span>
+                                    <strong>{dangerLevel}/5</strong>
+                                </div>
+                            </section>
+                            <header className="panel-title">状态</header>
+                            <div className="status-overview">
+                                <div className="overview-chip">
+                                    <span>角色</span>
+                                    <strong>{displayCharacter?.[0] ?? "-"}</strong>
+                                </div>
+                                <div className="overview-chip">
+                                    <span>{previewChar ? "技能" : stage === "event" ? "事件" : "怪物"}</span>
+                                    <strong>{currentFocusLabel}</strong>
+                                </div>
+                                <div className="overview-chip">
+                                    <span>卷轴</span>
+                                    <strong className={(hoveredSpendPreview?.scroll ?? 0) > 0 ? "scroll-preview consume-pulse" : "scroll-preview"}>{displayScroll}</strong>
+                                </div>
+                                <div className="overview-chip">
+                                    <span>攻击</span>
+                                    <strong className="atk-line">
+                                        <span className="atk-main">[{atkMin}~{atkMax}]</span>
+                                        {displayExtraAtk > 0 ? (
+                                            <span className={`atk-bonus ${hasTempExtraAtkInDisplay ? "atk-bonus-temp" : ""}`}>+{displayExtraAtk}</span>
+                                        ) : (
+                                            ""
+                                        )}
+                                        {hoveredGainPreview?.extraAtk && (
+                                            <span
+                                                className={`atk-gain-hint ${hoveredGainPreview.extraAtk === "plusminus" ? "is-mixed" : hoveredGainPreview.extraAtk === "plusmaybe" ? "is-maybe" : ""}`}
+                                            >
+                                                {gainHintText(hoveredGainPreview.extraAtk)}
+                                            </span>
+                                        )}
+                                    </strong>
+                                </div>
+                            </div>
+
+                            <div className="resource-stack">
+                                <SegmentedResource
+                                    icon="❤"
+                                    label="生命"
+                                    value={displayHp}
+                                    max={playerHpMax}
+                                    segments={hpSegments}
+                                    consumeCount={hoveredSpendPreview?.hp ?? 0}
+                                    gainHint={hoveredGainPreview?.hp}
+                                    tone="hp"
+                                    threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.hp)}
+                                />
+                                <SegmentedResource
+                                    valuePrefix={armorEffectStars}
+                                    icon="🛡"
+                                    label="护甲"
+                                    value={displayDefense}
+                                    max={defenseMax}
+                                    displayValue={defenseDisplayValue}
+                                    segments={defSegments}
+                                    consumeCount={hoveredSpendPreview?.defense ?? 0}
+                                    gainHint={hoveredGainPreview?.defense}
+                                    secondaryGainHint={hoveredGainPreview?.defenseMax}
+                                    secondaryGainHintPrefix="Max"
+                                    tone="shield"
+                                    threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.shield)}
+                                />
+                                {stage === "combat" && (
+                                    <IconStripResource
+                                        icon="✦"
+                                        label="技能点"
+                                        value={snapshot.combat.skillPoint}
+                                        unit={1}
+                                        maxValue={12}
+                                        consumeCount={hoveredSpendPreview?.skillPoint ?? 0}
+                                        gainHint={hoveredGainPreview?.skillPoint}
+                                        tone="path"
+                                        threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.path)}
+                                    />
+                                )}
+                                <IconStripResource
+                                    icon="🍖"
+                                    label="食物"
+                                    value={displayFood}
+                                    unit={1}
+                                    maxValue={foodMax}
+                                    segments={foodSegments}
+                                    consumeCount={hoveredSpendPreview?.food ?? 0}
+                                    gainHint={hoveredGainPreview?.food}
+                                    tone="food"
+                                    threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.food)}
+                                />
+                                <IconStripResource
+                                    icon="🪙"
+                                    label="金币"
+                                    value={displayCoin}
+                                    unit={1}
+                                    maxValue={coinMax}
+                                    segments={coinSegments}
+                                    consumeCount={hoveredSpendPreview?.coin ?? 0}
+                                    gainHint={hoveredGainPreview?.coin}
+                                    tone="coin"
+                                    threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.coin)}
+                                />
+                                {stage === "combat" && (
+                                    <MonsterCompositeResource
+                                        hp={snapshot.combat.monsterHp || 0}
+                                        hpMax={monsterMax}
+                                        atk={effectiveMonsterAtk}
+                                        atkMax={monsterAtkMax}
+                                    />
+                                )}
+                                <XpCompositeResource
+                                    xp={snapshot.player.xp}
+                                    xpMax={XP_MAX}
+                                    xpLevel={snapshot.player.xpLevel}
+                                    xpGainHint={hoveredGainPreview?.xp}
+                                    levelGainHint={hoveredGainPreview?.xpLevel}
+                                />
+                                <ProgressCompositeResource room={snapshot.dungeon.roomIdx} roomMax={roomMax} floor={snapshot.dungeon.floor} floorMax={floorMax} />
+                            </div>
+                        </section>
+
+                        {showDeveloperPanel && (
+                            <section
+                                className={`developer-panel${developerPanelDragging ? " is-dragging" : ""}`}
+                                ref={developerPanelRef}
+                                aria-label="开发者面板"
+                                style={{ left: `${developerPanelPosition.x}px`, top: `${developerPanelPosition.y}px` }}
+                            >
+                                <header className="developer-panel-head">
+                                    <div>
+                                        <div className="developer-panel-kicker">开发者面板</div>
+                                        <strong>滚轮调值</strong>
+                                    </div>
+                                    <div className="developer-panel-head-tools">
+                                        <button
+                                            type="button"
+                                            className="developer-panel-drag-handle"
+                                            onPointerDown={handleDeveloperPanelPointerDown}
+                                            aria-label="拖动开发者面板"
+                                        >
+                                            拖动
+                                        </button>
+                                        <span className="developer-panel-shortcut">{DEV_PANEL_TOGGLE}</span>
+                                    </div>
+                                </header>
+                                <div className="developer-panel-note">将鼠标移到条目上滚动即可增减。隐藏项也会显示在这里。</div>
+                                <div className="developer-control-list">
+                                    {developerControls.map((control) => (
+                                        <button
+                                            key={control.key}
+                                            type="button"
+                                            className={`developer-control ${control.hidden ? "is-hidden-field" : ""}`}
+                                            onWheel={(event) => handleDeveloperWheel(event, control.key)}
+                                        >
+                                            <span className="developer-control-label">{control.label}</span>
+                                            <strong className="developer-control-value">{control.value}</strong>
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className="developer-next-room">
+                                    <div className="developer-next-room-head">
+                                        <span>下个房间</span>
+                                        <strong>{developerNextRoomKey ?? "无"}</strong>
+                                    </div>
+                                    <div className="developer-room-type-grid">
+                                        {DEV_ROOM_TYPE_OPTIONS.map((eventType) => (
+                                            <button
+                                                key={eventType}
+                                                type="button"
+                                                className={`developer-room-type ${developerNextRoomType === eventType ? "is-active" : ""}`}
+                                                onClick={() => handleDeveloperRoomTypeChange(eventType)}
+                                                disabled={!developerNextRoomKey}
+                                            >
+                                                {DEV_ROOM_TYPE_LABELS[eventType]}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </section>
+                        )}
+                    </div>
+                </>
+            )}
         </main>
     );
 }
