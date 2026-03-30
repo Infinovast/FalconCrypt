@@ -77,6 +77,7 @@ const sample = <T>(arr: T[], count: number): T[] => {
 
 type RoomActionResult = {
     complete: boolean;
+    roomAdvancedInternally?: boolean;
     combat?: {
         monsterName: string;
         hp: number;
@@ -1107,7 +1108,7 @@ export class GameState {
 
         this.snapshot.combat.skillPoint -= SKILL_SP_COST.critical;
         const multiplier = this.randomFrom([0.25, 0.5, 1.5, 2, 2.5]);
-        this.addLog(`暴击倍率 x${multiplier}`);
+        this.addLog(`暴击倍率: x${multiplier}`);
         this.playerAttack(multiplier);
         return true;
     }
@@ -1327,6 +1328,7 @@ export class GameState {
                 const roomCount = this.snapshot.dungeon.floor + ROOM_ADD;
                 this.snapshot.dungeon.roomIdx = Math.min(this.snapshot.dungeon.roomIdx, roomCount);
                 this.addLog(`你坠入下一层的同号房间: B${this.snapshot.dungeon.floor}-${this.snapshot.dungeon.roomIdx}`);
+                return { complete: true, roomAdvancedInternally: true };
             }
         }
 

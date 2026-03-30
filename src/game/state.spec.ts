@@ -548,6 +548,7 @@ describe("GameState combat actions", () => {
         const result = state.resolveRoomAction("trap_event", "disarm");
 
         expect(result.complete).toBe(true);
+        expect(result.roomAdvancedInternally).toBe(true);
         expect(state.snapshot.dungeon.floor).toBe(3);
         expect(state.snapshot.dungeon.roomIdx).toBe(3);
         expect(state.snapshot.player.hp).toBeLessThan(20);

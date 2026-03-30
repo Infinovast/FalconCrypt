@@ -193,10 +193,16 @@ body::before {
     border-radius: 14px;
     padding: 12px;
     touch-action: none;
+    cursor: grab;
 }
 
 .developer-panel.is-dragging {
     box-shadow: 0 24px 56px rgba(0, 0, 0, 0.42);
+    cursor: grabbing;
+}
+
+.developer-panel button {
+    cursor: pointer;
 }
 
 .developer-panel-head {
@@ -210,20 +216,6 @@ body::before {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-}
-
-.developer-panel-drag-handle {
-    padding: 6px 10px;
-    min-height: 30px;
-    border-radius: 10px;
-    border-color: rgba(255, 209, 102, 0.3);
-    background: linear-gradient(180deg, rgba(74, 59, 26, 0.9), rgba(40, 29, 11, 0.92));
-    color: #ffe8b8;
-    cursor: grab;
-}
-
-.developer-panel-drag-handle:active {
-    cursor: grabbing;
 }
 
 .developer-panel-kicker {
@@ -785,11 +777,6 @@ body::before {
 
 .scroll-action-tip {
     min-width: 230px;
-}
-
-.forge-hover-tip {
-    width: 100%;
-    display: none;
 }
 
 .event-tip {
@@ -1539,6 +1526,11 @@ button:disabled {
     border-radius: 4px;
 }
 
+.segment {
+    border: 1px solid rgba(136, 187, 202, 0.32);
+    background: rgba(136, 187, 202, 0.12);
+}
+
 .segment.on {
     background: linear-gradient(180deg, rgba(160, 255, 246, 0.88), rgba(72, 200, 184, 0.95));
     border-color: rgba(197, 255, 248, 0.8);
@@ -1689,6 +1681,14 @@ button:disabled {
     display: grid;
     grid-template-columns: repeat(14, minmax(0, 1fr));
     gap: 3px;
+}
+
+.monster-segment-hp,
+.monster-segment-atk {
+    height: 12px;
+    border-radius: 3px;
+    border: 1px solid rgba(255, 164, 122, 0.26);
+    background: rgba(255, 164, 122, 0.12);
 }
 
 .monster-segment-hp.on {
@@ -2142,8 +2142,21 @@ button:disabled {
     color: rgba(230, 240, 238, 0.78);
 }
 
+.log-entry-detail-full,
 .log-entry-detail-only {
     flex: 1 1 auto;
+}
+
+.log-entry-detail-standalone {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.log-entry-detail-standalone::before {
+    display: none;
+}
+
+.log-entry-detail-standalone .log-entry-line {
+    min-height: 0;
 }
 
 .log-entry-room {

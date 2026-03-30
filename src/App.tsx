@@ -5,8 +5,9 @@ import {
     CRITICAL_TOOLTIP,
     CHARACTER_HOVER_HINTS,
     CHEST_REWARD_POOL,
+    DANGER_INDEX_RULES,
     FLOOR,
-    ForgeUpgradeType,
+    FORGE_HOVER_HINTS,
     MONSTER_SEGMENT_MAX,
     RESOURCE_SEGMENT_MAX,
     RESOURCE_THRESHOLD_RULES,
@@ -93,9 +94,9 @@ type CategorizedLog = {
     category: LogCategory;
 };
 
-type ForgeHoverHint = {
+type TooltipHint = {
     title: string;
-    detail: string;
+    detail?: string;
 };
 
 type VictoryFxShard = {
@@ -447,17 +448,6 @@ const getShopBuyValueById = (itemId: string): (typeof SHOP_BUY_POOL)[number]["va
 const getChestRewardValueById = (rewardId: string): (typeof CHEST_REWARD_POOL)[number]["value"] | undefined =>
     CHEST_REWARD_POOL.find((item) => item.id === rewardId)?.value;
 
-const FORGE_HOVER_HINTS: Record<ForgeUpgradeType, ForgeHoverHint> = {
-    thorns: {
-        title: "荆棘改造：牺牲输出，换取反伤。",
-        detail: "消耗 1 点额外攻击与 9 金币；战斗中敌人攻击你后，有概率受到其攻击 25% 的反伤。",
-    },
-    heavy: {
-        title: "重甲改造：牺牲上限，换取稳固承伤。",
-        detail: "消耗 2 点护甲上限与 6 金币；受到非真伤时，只要还有护甲，本次伤害不会溢出到生命。",
-    },
-};
-
 const isKnownScroll = (value: string | null | undefined): value is keyof typeof SCROLL_INFO => {
     return Boolean(value && value in SCROLL_INFO);
 };
@@ -476,6 +466,61 @@ const getCharacterHoverHint = (character: CharacterTuple): CharacterHoverHint =>
 const getCharacterSkillHint = (character: CharacterTuple | null): string | null => {
     if (!character) return null;
     return CHARACTER_HOVER_HINTS[character[0]]?.skill ?? `${character[6]}：按战况灵活使用。`;
+};
+
+const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
+
+const scoreByBands = (value: number, bands: readonly { max: number; score: number }[]): number => {
+    const matched = bands.find((band) => value <= band.max);
+    return matched?.score ?? 0;
+};
+
+const calcDangerIndex = ({
+    stage,
+    floor,
+    room,
+    hp,
+    defense,
+    food,
+    combat,
+}: {
+    stage: Stage;
+    floor: number;
+    room: number;
+    hp: number;
+    defense: number;
+    food: number;
+    combat: { monsterName: string; monsterHp: number; monsterAtk: number; isBoss: boolean };
+}): number => {
+    if (stage === "menu" || stage === "character") {
+        return 1;
+    }
+
+    const floorScore = Math.max(0, floor - 1) * DANGER_INDEX_RULES.floorStep;
+    const roomScore = Math.max(0, room - 1) * DANGER_INDEX_RULES.roomStep;
+    const hpScore = scoreByBands(hp, DANGER_INDEX_RULES.hpBands);
+    const defenseScore = scoreByBands(defense, DANGER_INDEX_RULES.defenseBands);
+    const foodScore = scoreByBands(food, DANGER_INDEX_RULES.foodBands);
+
+    let combatPressure = 0;
+    if (combat.monsterName) {
+        const monsterHpScore = Math.min(DANGER_INDEX_RULES.monsterHpScoreMax, combat.monsterHp / DANGER_INDEX_RULES.monsterHpDivisor);
+        const monsterAtkScore = Math.min(DANGER_INDEX_RULES.monsterAtkScoreMax, combat.monsterAtk / DANGER_INDEX_RULES.monsterAtkDivisor);
+        combatPressure =
+            DANGER_INDEX_RULES.combatScore +
+            monsterHpScore +
+            monsterAtkScore +
+            (combat.isBoss ? DANGER_INDEX_RULES.bossScore : 0);
+    } else if (stage === "event") {
+        combatPressure = DANGER_INDEX_RULES.eventScore;
+    }
+
+    const totalScore = floorScore + roomScore + hpScore + defenseScore + foodScore + combatPressure;
+    const normalizedScore =
+        (clamp(totalScore, DANGER_INDEX_RULES.minScore, DANGER_INDEX_RULES.maxScore) - DANGER_INDEX_RULES.minScore) /
+        Math.max(1, DANGER_INDEX_RULES.maxScore - DANGER_INDEX_RULES.minScore);
+
+    return Math.max(1, Math.min(5, Math.round(normalizedScore * 4) + 1));
 };
 
 function useDeltaClass(value: number): "" | "delta-up" | "delta-down" {
@@ -846,7 +891,7 @@ function ProgressCompositeResource({ room, roomMax, floor, floorMax }: ProgressC
 export function App(): JSX.Element {
     const developerPanelDefaultPosition = { x: 24, y: 24 };
     const [stage, setStage] = useState<Stage>("menu");
-    const [tick, setTick] = useState(0);
+    const [, setTick] = useState(0);
     const [showWelcomeFx, setShowWelcomeFx] = useState(false);
     const [showVictoryFx, setShowVictoryFx] = useState(false);
     const [welcomeFxOrigin, setWelcomeFxOrigin] = useState({ x: 0.5, y: 0.5 });
@@ -872,7 +917,6 @@ export function App(): JSX.Element {
     const [developerPanelDragging, setDeveloperPanelDragging] = useState(false);
     const [hoveredSpendPreview, setHoveredSpendPreview] = useState<ResourceSpendPreview | null>(null);
     const [hoveredGainPreview, setHoveredGainPreview] = useState<ResourceGainPreview | null>(null);
-    const [hoveredForgeHint, setHoveredForgeHint] = useState<ForgeHoverHint | null>(null);
     const hpPeakRef = useRef(1);
     const foodPeakRef = useRef(1);
     const coinPeakRef = useRef(1);
@@ -934,7 +978,6 @@ export function App(): JSX.Element {
         : pendingScroll
             ? `${snapshot.player.scroll ?? "-"} (待替换 ${pendingScroll})`
             : snapshot.player.scroll ?? "-";
-    const dangerLevel = useMemo(() => Math.min(5, snapshot.dungeon.floor), [snapshot.dungeon.floor, tick]);
     const playerHpMax = hpHistoryCap;
     const defenseMax = Math.max(1, previewChar ? previewChar[3] : snapshot.player.defenseMax);
     const defenseDisplayValue = `${Math.max(0, displayDefense)}/${defenseMax}`;
@@ -962,6 +1005,35 @@ export function App(): JSX.Element {
     const floorMax = Math.max(FLOOR, snapshot.dungeon.floor, 1);
     const currentFloorRoomCount = snapshot.dungeon.floor + ROOM_ADD;
     const roomMax = Math.max(snapshot.dungeon.floor + ROOM_ADD, snapshot.dungeon.roomIdx, 1);
+    const dangerLevel = useMemo(
+        () =>
+            calcDangerIndex({
+                stage,
+                floor: snapshot.dungeon.floor,
+                room: snapshot.dungeon.roomIdx,
+                hp: displayHp,
+                defense: displayDefense,
+                food: displayFood,
+                combat: {
+                    monsterName: snapshot.combat.monsterName,
+                    monsterHp: snapshot.combat.monsterHp,
+                    monsterAtk: effectiveMonsterAtk,
+                    isBoss: snapshot.combat.isBoss,
+                },
+            }),
+        [
+            stage,
+            snapshot.dungeon.floor,
+            snapshot.dungeon.roomIdx,
+            displayHp,
+            displayDefense,
+            displayFood,
+            snapshot.combat.monsterName,
+            snapshot.combat.monsterHp,
+            effectiveMonsterAtk,
+            snapshot.combat.isBoss,
+        ]
+    );
     const exploreEnterLabel =
         snapshot.dungeon.roomIdx === 1
             ? "进入房间"
@@ -970,10 +1042,10 @@ export function App(): JSX.Element {
                 : "下个房间";
     const showFullMap = displayCharacter?.[0] === "术士";
     const currentFloorMap = gameState.getMapRoomsForFloor(snapshot.dungeon.floor, showFullMap);
-    const nextFloor = Math.min(FLOOR, snapshot.dungeon.floor + 1);
-    const nextFloorMap = gameState.getMapRoomsForFloor(nextFloor, showFullMap);
+    const hasNextFloor = snapshot.dungeon.floor < FLOOR;
+    const nextFloor = hasNextFloor ? snapshot.dungeon.floor + 1 : null;
+    const nextFloorMap = hasNextFloor && nextFloor ? gameState.getMapRoomsForFloor(nextFloor, showFullMap) : [];
     const shopInventory = stage === "event" && activeEvent === "shop_event" ? gameState.getShopInventoryView() : null;
-    const forgeUpgradeType = stage === "event" && activeEvent === "forge_event" ? gameState.getCurrentForgeUpgradeType() : null;
     const developerNextRoomType = gameState.getDeveloperNextRoomType();
     const developerNextRoomKey = gameState.getDeveloperNextRoomKey();
     const logBuckets = buildLogBuckets(snapshot.logs.slice(-48));
@@ -1049,7 +1121,19 @@ export function App(): JSX.Element {
     const clearHoveredResourcePreview = () => {
         setHoveredSpendPreview(null);
         setHoveredGainPreview(null);
-        setHoveredForgeHint(null);
+    };
+
+    const renderActionTooltip = (hint: TooltipHint | null | undefined) => {
+        if (!hint) {
+            return null;
+        }
+
+        return (
+            <span className="character-option-tip scroll-action-tip" aria-hidden="true">
+                <span>{hint.title}</span>
+                {hint.detail ? <span>{hint.detail}</span> : null}
+            </span>
+        );
     };
 
     const renderScrollTooltip = (scrollName: string | null | undefined) => {
@@ -1058,12 +1142,7 @@ export function App(): JSX.Element {
         }
 
         const tip = SCROLL_INFO[scrollName];
-        return (
-            <span className="character-option-tip scroll-action-tip" aria-hidden="true">
-                <span>{tip.title}</span>
-                <span>{tip.detail}</span>
-            </span>
-        );
+        return renderActionTooltip(tip);
     };
 
     const renderSkillTooltip = (character: CharacterTuple | null) => {
@@ -1072,19 +1151,10 @@ export function App(): JSX.Element {
             return null;
         }
 
-        return (
-            <span className="character-option-tip scroll-action-tip" aria-hidden="true">
-                <span>{skillHint}</span>
-            </span>
-        );
+        return renderActionTooltip({ title: skillHint });
     };
 
-    const renderCriticalTooltip = () => (
-        <span className="character-option-tip scroll-action-tip" aria-hidden="true">
-            <span>{CRITICAL_TOOLTIP.title}</span>
-            <span>{CRITICAL_TOOLTIP.detail}</span>
-        </span>
-    );
+    const renderCriticalTooltip = () => renderActionTooltip(CRITICAL_TOOLTIP);
 
     const renderTrapActionTooltip = (actionId: string) => {
         if (actionId !== "disarm" && actionId !== "rush") {
@@ -1092,12 +1162,7 @@ export function App(): JSX.Element {
         }
 
         const tip = TRAP_ACTION_TOOLTIPS[actionId];
-        return (
-            <span className="character-option-tip scroll-action-tip" aria-hidden="true">
-                <span>{tip.title}</span>
-                <span>{tip.detail}</span>
-            </span>
-        );
+        return renderActionTooltip(tip);
     };
 
     const renderStatueActionTooltip = (actionId: string) => {
@@ -1106,12 +1171,7 @@ export function App(): JSX.Element {
         }
 
         const tip = STATUE_ACTION_TOOLTIPS[actionId];
-        return (
-            <span className="character-option-tip scroll-action-tip" aria-hidden="true">
-                <span>{tip.title}</span>
-                <span>{tip.detail}</span>
-            </span>
-        );
+        return renderActionTooltip(tip);
     };
 
     const buildActionSpendPreview = (action: RoomAction): ResourceSpendPreview => {
@@ -1353,10 +1413,6 @@ export function App(): JSX.Element {
             const gainPreview = buildActionGainPreview(action, spendPreview);
             setHoveredSpendPreview(hasSpendPreview(spendPreview) ? spendPreview : null);
             setHoveredGainPreview(hasGainPreview(gainPreview) ? gainPreview : null);
-            if (activeEvent === "forge_event") {
-                if (action.id === "forge_armor_thorns") setHoveredForgeHint(FORGE_HOVER_HINTS.thorns);
-                if (action.id === "forge_armor_heavy") setHoveredForgeHint(FORGE_HOVER_HINTS.heavy);
-            }
         };
 
         return {
@@ -1384,7 +1440,6 @@ export function App(): JSX.Element {
         });
         setHoveredSpendPreview(hasSpendPreview(spendPreview) ? spendPreview : null);
         setHoveredGainPreview({ hp: "plusplus" });
-        setHoveredForgeHint(null);
     };
 
     useEffect(() => {
@@ -1489,8 +1544,13 @@ export function App(): JSX.Element {
         prevStageRef.current = stage;
     }, [stage]);
 
-    const handleDeveloperPanelPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const handleDeveloperPanelPointerDown = (event: React.PointerEvent<HTMLElement>) => {
         if (event.pointerType === "mouse" && event.button !== 0) {
+            return;
+        }
+
+        const target = event.target;
+        if (target instanceof Element && target.closest("button")) {
             return;
         }
 
@@ -1504,7 +1564,7 @@ export function App(): JSX.Element {
             y: event.clientY - panelRect.top,
         };
         setDeveloperPanelDragging(true);
-        event.currentTarget.setPointerCapture(event.pointerId);
+        developerPanelRef.current?.setPointerCapture(event.pointerId);
     };
 
     useEffect(() => {
@@ -1745,6 +1805,16 @@ export function App(): JSX.Element {
             return;
         }
 
+        if (result.roomAdvancedInternally) {
+            setEventAwaitingLeave(false);
+            setActiveRoomKey(null);
+            setActiveEvent(null);
+            setPendingBossBonusChest(false);
+            setStage("explore");
+            refresh();
+            return;
+        }
+
         if (result.complete) {
             const hasRoomLeaveAction = gameState.getRoomActions(activeEvent).some((action) => action.id === "leave");
             if (!hasRoomLeaveAction) {
@@ -1790,6 +1860,16 @@ export function App(): JSX.Element {
                 setEventAwaitingLeave(false);
                 gameState.startCombat(leaveResult.combat.monsterName, leaveResult.combat.hp, leaveResult.combat.atk, leaveResult.combat.isBoss);
                 setStage("combat");
+                refresh();
+                return;
+            }
+
+            if (leaveResult.roomAdvancedInternally) {
+                setEventAwaitingLeave(false);
+                setActiveRoomKey(null);
+                setActiveEvent(null);
+                setPendingBossBonusChest(false);
+                setStage("explore");
                 refresh();
                 return;
             }
@@ -2033,24 +2113,26 @@ export function App(): JSX.Element {
                                         </div>
                                     </div>
 
-                                    <div className="map-floor">
-                                        <div className="map-floor-title">下一层 B{nextFloor}</div>
-                                        <div className="map-room-list" aria-label={`下一层 B${nextFloor} 预判`}>
-                                            {nextFloorMap.map((room) => (
-                                                <div key={room.key} className="map-room-node">
-                                                    <span className={`map-room ${room.revealed ? "is-revealed" : ""} ${room.reorderedByBranch ? "is-reordered" : ""}`}>
-                                                        {room.floor}-{room.index} {room.display}
-                                                    </span>
-                                                    {room.chosenBranchName && (
-                                                        <>
-                                                            <span className="map-branch-link" aria-hidden="true" />
-                                                            <span className="map-room map-room-branch is-revealed">{room.chosenBranchName}</span>
-                                                        </>
-                                                    )}
-                                                </div>
-                                            ))}
+                                    {hasNextFloor && nextFloor && (
+                                        <div className="map-floor">
+                                            <div className="map-floor-title">下一层 B{nextFloor}</div>
+                                            <div className="map-room-list" aria-label={`下一层 B${nextFloor} 预判`}>
+                                                {nextFloorMap.map((room) => (
+                                                    <div key={room.key} className="map-room-node">
+                                                        <span className={`map-room ${room.revealed ? "is-revealed" : ""} ${room.reorderedByBranch ? "is-reordered" : ""}`}>
+                                                            {room.floor}-{room.index} {room.display}
+                                                        </span>
+                                                        {room.chosenBranchName && (
+                                                            <>
+                                                                <span className="map-branch-link" aria-hidden="true" />
+                                                                <span className="map-room map-room-branch is-revealed">{room.chosenBranchName}</span>
+                                                            </>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
                                         </div>
-                                    </div>
+                                    )}
                                 </div>
                             </div>
                             <div className="map-canvas-box">
@@ -2088,14 +2170,19 @@ export function App(): JSX.Element {
                                             </div>
                                         ) : (
                                             logViews[section].map((entry) => (
-                                                <article key={entry.id} className={`log-entry log-entry-${entry.category}`}>
-                                                    <span className="log-entry-index">{entry.indexLabel}</span>
+                                                <article
+                                                    key={entry.id}
+                                                    className={`log-entry log-entry-${entry.category} ${entry.detail ? "" : "log-entry-detail-standalone"}`.trim()}
+                                                >
+                                                    {entry.detail ? <span className="log-entry-index">{entry.indexLabel}</span> : null}
                                                     <span className="log-entry-line">
-                                                        {entry.detail ? (
+                                                        {entry.detail && entry.emphasis ? (
                                                             <>
                                                                 <strong className="log-entry-emphasis">{entry.emphasis}</strong>
                                                                 <span className="log-entry-detail">{entry.detail}</span>
                                                             </>
+                                                        ) : entry.detail ? (
+                                                            <span className="log-entry-detail log-entry-detail-full">{entry.detail}</span>
                                                         ) : (
                                                             <strong className="log-entry-emphasis log-entry-detail-only">{entry.emphasis}</strong>
                                                         )}
@@ -2225,12 +2312,6 @@ export function App(): JSX.Element {
                                                 {activeEvent === "mine_event" && (
                                                     <div className="event-tip">提示：本房间只要执行过挖掘，离开后将跳过通用房间结算。</div>
                                                 )}
-                                                {activeEvent === "forge_event" && hoveredForgeHint && (
-                                                    <div className="forge-hover-tip" aria-hidden="true">
-                                                        <span>{hoveredForgeHint.title}</span>
-                                                        <span>{hoveredForgeHint.detail}</span>
-                                                    </div>
-                                                )}
                                                 {gameState
                                                     .getRoomActions(activeEvent)
                                                     .filter((action) => {
@@ -2249,7 +2330,7 @@ export function App(): JSX.Element {
                                                         <button
                                                             key={action.id}
                                                             className={
-                                                                action.id.startsWith("forge_armor_") ||
+                                                                (activeEvent === "forge_event" && (action.id === "weapon" || action.id === "armor" || action.id.startsWith("forge_armor_"))) ||
                                                                     (activeEvent === "trap_event" && (action.id === "disarm" || action.id === "rush")) ||
                                                                     (activeEvent === "statue_event" && (action.id === "pray" || action.id === "offer"))
                                                                     ? "scroll-action-btn"
@@ -2268,12 +2349,18 @@ export function App(): JSX.Element {
                                                             <ActionButtonContent action={action} />
                                                             {activeEvent === "trap_event" ? renderTrapActionTooltip(action.id) : null}
                                                             {activeEvent === "statue_event" ? renderStatueActionTooltip(action.id) : null}
-                                                            {activeEvent === "forge_event" && forgeUpgradeType && action.id === `forge_armor_${forgeUpgradeType}` && (
-                                                                <span className="character-option-tip" aria-hidden="true">
-                                                                    <span>{FORGE_HOVER_HINTS[forgeUpgradeType].title}</span>
-                                                                    <span>{FORGE_HOVER_HINTS[forgeUpgradeType].detail}</span>
-                                                                </span>
-                                                            )}
+                                                            {activeEvent === "forge_event" && action.id === "weapon"
+                                                                ? renderActionTooltip(FORGE_HOVER_HINTS.weapon)
+                                                                : null}
+                                                            {activeEvent === "forge_event" && action.id === "armor"
+                                                                ? renderActionTooltip(FORGE_HOVER_HINTS.armor)
+                                                                : null}
+                                                            {activeEvent === "forge_event" && action.id === "forge_armor_thorns"
+                                                                ? renderActionTooltip(FORGE_HOVER_HINTS.thorns)
+                                                                : null}
+                                                            {activeEvent === "forge_event" && action.id === "forge_armor_heavy"
+                                                                ? renderActionTooltip(FORGE_HOVER_HINTS.heavy)
+                                                                : null}
                                                         </button>
                                                     ))}
                                             </>
@@ -2317,7 +2404,7 @@ export function App(): JSX.Element {
                                     </div>
                                 </div>
                                 <div className="status-hero-badge">
-                                    <span>危险</span>
+                                    <span>危险指数</span>
                                     <strong>{dangerLevel}/5</strong>
                                 </div>
                             </section>
@@ -2444,6 +2531,7 @@ export function App(): JSX.Element {
                                 ref={developerPanelRef}
                                 aria-label="开发者面板"
                                 style={{ left: `${developerPanelPosition.x}px`, top: `${developerPanelPosition.y}px` }}
+                                onPointerDown={handleDeveloperPanelPointerDown}
                             >
                                 <header className="developer-panel-head">
                                     <div>
@@ -2451,14 +2539,6 @@ export function App(): JSX.Element {
                                         <strong>滚轮调值</strong>
                                     </div>
                                     <div className="developer-panel-head-tools">
-                                        <button
-                                            type="button"
-                                            className="developer-panel-drag-handle"
-                                            onPointerDown={handleDeveloperPanelPointerDown}
-                                            aria-label="拖动开发者面板"
-                                        >
-                                            拖动
-                                        </button>
                                         <span className="developer-panel-shortcut">{DEV_PANEL_TOGGLE}</span>
                                     </div>
                                 </header>

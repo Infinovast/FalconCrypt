@@ -18,7 +18,36 @@ export const NEXT_ROOM_REVEAL_RATE = 0.3;
 export const NEXT_FLOOR_REVEAL_RATE = 0.1;
 export const BRANCH_REORDER_SUCCESS_RATE = 0.5;
 
+export const DANGER_INDEX_RULES = {
+    floorStep: 0.9,
+    roomStep: 0.35,
+    hpBands: [
+        { max: 4, score: 2.2 },
+        { max: 8, score: 1.4 },
+        { max: 12, score: 0.7 },
+    ],
+    defenseBands: [
+        { max: 0, score: 1.2 },
+        { max: 2, score: 0.6 },
+    ],
+    foodBands: [
+        { max: 0, score: 1.6 },
+        { max: 2, score: 0.9 },
+        { max: 4, score: 0.3 },
+    ],
+    eventScore: 0.2,
+    combatScore: 0.75,
+    bossScore: 1.1,
+    monsterHpDivisor: 18,
+    monsterHpScoreMax: 0.8,
+    monsterAtkDivisor: 6,
+    monsterAtkScoreMax: 0.9,
+    minScore: 0,
+    maxScore: 6.2,
+} as const;
+
 export type ForgeUpgradeType = "thorns" | "heavy";
+export type ForgeActionTooltipKey = "weapon" | "armor" | ForgeUpgradeType;
 
 export const THRESHOLD_DISABLED = -1;
 
@@ -39,11 +68,11 @@ export const RESOURCE_THRESHOLD_RULES: Record<ResourceThresholdKey, ThresholdRul
 };
 
 export const CHARS: CharacterTuple[] = [
-    ["术士", 25, 8, 1, 9, 0, "神算"],
-    ["圣骑士", 23, 5, 4, 9, 1, "净化"],
-    ["盗贼", 24, 13, 1, 8, 0, "卷轴"],
-    ["祭司", 30, 7, 1, 8, 0, "血祭"],
-    ["刺客", 22, 4, 1, 7, 2, "挑衅"],
+    ["术士", 22, 8, 1, 9, 0, "神算"],
+    ["圣骑士", 20, 5, 4, 9, 1, "净化"],
+    ["盗贼", 21, 13, 1, 8, 0, "卷轴"],
+    ["祭司", 27, 7, 1, 8, 0, "血祭"],
+    ["刺客", 19, 4, 1, 7, 2, "挑衅"],
 ];
 
 export const ROOMS: RoomTuple[] = [
@@ -85,23 +114,23 @@ export const SCROLL_INFO: Record<(typeof SCROLL_LIST)[number], ScrollInfo> = {
 
 export const CHARACTER_HOVER_HINTS: Record<string, CharacterHoverHint> = {
     术士: {
-        trait: "特色：数值均衡，地图全览，少走弯路。",
+        trait: "术士：数值均衡，地图全览，少走弯路。",
         skill: "神算：提前看见房间分布。（被动）",
     },
     圣骑士: {
-        trait: "特色：高护甲开局，容错更高。",
+        trait: "圣骑士：高护甲开局，容错更高。",
         skill: "净化：消耗少量食物，降低敌攻。",
     },
     盗贼: {
-        trait: "特色：高金币起步，成型更快。",
+        trait: "盗贼：高金币起步，成型更快。",
         skill: "卷轴：开局与击败Boss后获得卷轴。（被动）",
     },
     祭司: {
-        trait: "特色：高生命开局，续航稳定。",
+        trait: "祭司：高生命开局，续航稳定。",
         skill: "血祭：献祭生命，换取临时攻击。",
     },
     刺客: {
-        trait: "特色：额外攻击高，爆发强。",
+        trait: "刺客：额外攻击高，爆发强。",
         skill: "挑衅：提高敌攻，换取更高临时攻击。",
     },
 };
@@ -132,11 +161,30 @@ export const TRAP_ACTION_TOOLTIPS: Record<"disarm" | "rush", TooltipContent> = {
 export const STATUE_ACTION_TOOLTIPS: Record<"pray" | "offer", TooltipContent> = {
     pray: {
         title: "直接向雕像祈祷，低概率获得祝福。",
-        detail: "可能得到 HP / Def / XP / ATK Extra 祝福奖励，失败则会受真伤或损失 XP 的诅咒。",
+        detail: "可能得到祝福奖励，失败则会受诅咒。",
     },
     offer: {
         title: "先供奉再祈祷，祝福概率更高。",
-        detail: "供奉优先消耗 Coin，若没有则消耗 Food。",
+        detail: "供奉优先消耗金币，若没有则消耗食物。",
+    },
+};
+
+export const FORGE_HOVER_HINTS: Record<ForgeActionTooltipKey, TooltipContent> = {
+    weapon: {
+        title: "锻造武器",
+        detail: "随机改动一次额外攻击，并顺带拿到一点锻造经验。",
+    },
+    armor: {
+        title: "升级护甲",
+        detail: "提升 1 点护甲上限；上限到 5 后会解锁重甲改造。",
+    },
+    thorns: {
+        title: "荆棘改造：牺牲输出，换取反伤",
+        detail: "消耗 1 点额外攻击与 9 金币；战斗中敌人攻击你后，大概率反弹其攻击 50% 的伤害。",
+    },
+    heavy: {
+        title: "重甲改造：牺牲上限，换取稳固承伤",
+        detail: "消耗 2 点护甲上限与 6 金币；受到非真伤时，只要还有护甲，本次伤害不会溢出到生命。",
     },
 };
 
@@ -203,7 +251,7 @@ export type ChestRewardTemplate = {
 export const CHEST_REWARD_POOL: ChestRewardTemplate[] = [
     { id: "coin", name: "金币", value: { coin: { min: 5, max: 9 } } },
     { id: "cloudy", name: "浑浊药水", value: { hpRange: { min: -2, max: 4 } } },
-    { id: "life", name: "秘制生命药水", value: { hp: 10 } },
+    { id: "life", name: "秘制生命药水", value: { hp: 8 } },
     { id: "whetstone", name: "优质磨刀石", value: { extraAtk: 2 } },
     { id: "poor_armor", name: "破损护甲", value: { defense: { min: 3, max: 6 } } },
     { id: "superior_armor", name: "精良护甲", value: { defenseMax: 2 } },
@@ -253,7 +301,7 @@ export const ROOM_RANGES = {
     forge: {
         weaponCost: 3,
         armorCost: 5,
-        armorDefMaxCap: 7,
+        armorDefMaxCap: 5,
         xpGain: { min: 1, max: 3 },
         weaponDeltaPool: [-1, 1, 1, 2] as const,
         armorDefMaxGain: 1,
@@ -261,8 +309,8 @@ export const ROOM_RANGES = {
         upgradePool: ["thorns", "heavy"] as const satisfies readonly ForgeUpgradeType[],
         thornsCostCoin: 9,
         thornsCostExtraAtk: 1,
-        thornsReflectRate: 0.5,
-        thornsReflectRatio: 0.25,
+        thornsReflectRate: 0.75,
+        thornsReflectRatio: 0.5,
         heavyArmorCostCoin: 6,
         heavyArmorCostDefMax: 2,
     },
