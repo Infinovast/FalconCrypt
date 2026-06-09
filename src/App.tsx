@@ -1,103 +1,47 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
+import { ActionPanel } from "./components/ActionPanel";
+import { DeveloperPanel } from "./components/DeveloperPanel";
+import type { DeveloperControl } from "./components/DeveloperPanel";
 import { GameCanvas } from "./components/GameCanvas";
+import { StatusSidebar } from "./components/StatusSidebar";
 import {
     CRITICAL_TOOLTIP,
-    CHARACTER_HOVER_HINTS,
-    CHEST_REWARD_POOL,
-    DANGER_INDEX_RULES,
     FLOOR,
-    FORGE_HOVER_HINTS,
-    MONSTER_SEGMENT_MAX,
-    RESOURCE_SEGMENT_MAX,
-    RESOURCE_THRESHOLD_RULES,
     ROOM_RANGES,
     ROOM_ADD,
     SCROLL_INFO,
-    SHOP_BUY_POOL,
     SKILL_SP_COST,
     STATUE_ACTION_TOOLTIPS,
-    THRESHOLD_DISABLED,
     TRAP_ACTION_TOOLTIPS,
-    XP_LEVEL_SEGMENT_MAX,
     XP_MAX,
-    XP_PROGRESS_SEGMENT_MAX,
 } from "./game/constants";
 import { gameState } from "./game/state";
 import type { DeveloperScalarField } from "./game/state";
 import type { CombatActionKind, ResourcePulseTone } from "./animations/combatAnimation";
 import type { RoomIntroKind } from "./animations/roomAnimation";
-import type { ActionDeltaBadge, ActionDeltaHint, CharacterHoverHint, CharacterTuple, CombatActionType, RoomAction } from "./game/types";
+import type { CharacterTuple, CombatActionType, RoomAction } from "./game/types";
 import type { ThresholdRule } from "./game/constants";
 import type { RoomEventType } from "./game/types";
-
-type Stage = "menu" | "character" | "explore" | "event" | "combat" | "gameover";
-
-type ResourceSpendKey = "hp" | "defense" | "defenseMax" | "skillPoint" | "food" | "coin" | "scroll" | "extraAtk";
-
-type ResourceSpendPreview = Partial<Record<ResourceSpendKey, number>>;
-
-type ResourceGainKey = "hp" | "defense" | "defenseMax" | "skillPoint" | "food" | "coin" | "xp" | "xpLevel" | "extraAtk";
-
-type ResourceGainHint = ActionDeltaHint;
-
-type ResourceGainPreview = Partial<Record<ResourceGainKey, ResourceGainHint>>;
-
-type ResourceDeltaRange = { min: number; max: number };
-
-type ResourceDeltaRanges = Partial<Record<ResourceGainKey, ResourceDeltaRange>>;
-
-type ActionDeltaBadgeTone = "cost" | "reward";
-
-type SegmentedResourceProps = {
-    icon: string;
-    label: string;
-    value: number;
-    max: number;
-    displayValue?: string;
-    segments?: number;
-    consumeCount?: number;
-    gainHint?: ResourceGainHint;
-    secondaryGainHint?: ResourceGainHint;
-    secondaryGainHintPrefix?: string;
-    valuePrefix?: React.ReactNode;
-    tone?: "hp" | "shield" | "enemy";
-    threshold: ThresholdRule;
-};
-
-type IconStripResourceProps = {
-    icon: string;
-    label: string;
-    value: number;
-    unit: number;
-    maxValue?: number;
-    segments?: number;
-    consumeCount?: number;
-    gainHint?: ResourceGainHint;
-    tone?: "coin" | "path" | "food";
-    threshold: ThresholdRule;
-};
-
-type LogCategory = "room" | "combat" | "resource" | "system";
-type LogEntryView = {
-    id: string;
-    category: LogCategory;
-    text: string;
-    indexLabel: string;
-    emphasis?: string;
-    detail: string;
-};
-
-type CategorizedLog = {
-    id: string;
-    text: string;
-    category: LogCategory;
-};
-
-type TooltipHint = {
-    title: string;
-    detail?: string;
-};
+import {
+    addDeltaRange,
+    applyActionBadgesToRanges,
+    applySpendPreviewAsNegativeRanges,
+    buildGainPreviewFromRanges,
+    buildLogTimeline,
+    calcDangerIndex,
+    calcScaledSegments,
+    DISABLED_THRESHOLD_RULE,
+    getCharacterSkillHint,
+    getChestRewardValueById,
+    getShopBuyValueById,
+    hasGainPreview,
+    hasSpendPreview,
+    isKnownScroll,
+    mergeSpendPreview,
+    mergeSpendPreviewFromBadge,
+} from "./game/uiHelpers";
+import type { ResourceDeltaRanges, ResourceGainPreview, ResourceSpendPreview, Stage, TooltipHint } from "./game/uiHelpers";
 
 type VictoryFxShard = {
     left: string;
@@ -113,39 +57,10 @@ type VictoryShardStyle = CSSProperties & {
     "--victory-hue": string;
 };
 
-type DeveloperControl = {
-    key: DeveloperScalarField;
-    label: string;
-    value: number;
-    hidden?: boolean;
-};
-
-const DEV_PANEL_TOGGLE = "Ctrl+Alt+Shift+D";
-
-const DEV_ROOM_TYPE_OPTIONS: RoomEventType[] = [
-    "monster_event",
-    "boss_event",
-    "branch_event",
-    "chest_event",
-    "trap_event",
-    "shop_event",
-    "bonfire_event",
-    "forge_event",
-    "statue_event",
-    "mine_event",
-];
-
-const DEV_ROOM_TYPE_LABELS: Record<RoomEventType, string> = {
-    monster_event: "怪物",
-    boss_event: "Boss",
-    branch_event: "分叉",
-    chest_event: "宝箱",
-    trap_event: "陷阱",
-    shop_event: "商店",
-    bonfire_event: "篝火",
-    forge_event: "铸锻",
-    statue_event: "雕像",
-    mine_event: "矿洞",
+type LogTimelineGroupItem = {
+    entry: ReturnType<typeof buildLogTimeline>[number];
+    groupIndex: number;
+    opacity: number;
 };
 
 const VICTORY_SHARDS: VictoryFxShard[] = [
@@ -162,740 +77,12 @@ const VICTORY_SHARDS: VictoryFxShard[] = [
     { left: "91%", delay: "840ms", duration: "3550ms", drift: "-38px", size: "9px", hue: "120" },
 ];
 
-const LOG_SECTION_ORDER: LogCategory[] = ["room", "combat", "resource", "system"];
-
-const LOG_SECTION_TITLES: Record<LogCategory, string> = {
-    room: "房间",
-    combat: "战斗",
-    resource: "资源",
-    system: "系统",
-};
-
-const ROOM_LOG_MARKERS = [
-    "进入房间",
-    "触发事件",
-    "分支",
-    "路线",
-    "宝箱",
-    "陷阱",
-    "商人",
-    "篝火",
-    "铸锻",
-    "雕像",
-    "矿洞",
-];
-
-const COMBAT_LOG_MARKERS = [
-    "遭遇",
-    "造成伤害",
-    "反击",
-    "寒冰效果",
-    "暴击",
-    "净化生效",
-    "血祭生效",
-    "挑衅生效",
-    "击败",
-    "脱离战斗",
-    "Boss",
-    "阵亡",
-    "无法释放暴击",
-    "无法使用技能",
-    "无法使用卷轴",
-    "火球术",
-    "冻结敌人",
-    "治疗术",
-    "隐身术",
-];
-
-const RESOURCE_LOG_MARKERS = [
-    "HP",
-    "Coin",
-    "Food",
-    "Def",
-    "XP",
-    "ATK",
-    "升级",
-    "恢复",
-    "损失",
-    "伤害",
-    "奖励",
-    "卷轴",
-];
-
-const RESOURCE_DELTA_LOG_RE = /\b(?:HP|Coin|Food|Def(?: Max)?|XP|ATK(?: Extra)?)\b\s*[+-]\d+/;
-
-const classifyLog = (line: string): LogCategory => {
-    if (COMBAT_LOG_MARKERS.some((marker) => line.includes(marker))) {
-        return "combat";
-    }
-    // Resource delta logs can carry room prefixes (e.g. "宝箱金币: Coin +4"),
-    // so we classify them before checking room keywords.
-    if (RESOURCE_DELTA_LOG_RE.test(line)) {
-        return "resource";
-    }
-    if (ROOM_LOG_MARKERS.some((marker) => line.includes(marker))) {
-        return "room";
-    }
-    if (RESOURCE_LOG_MARKERS.some((marker) => line.includes(marker))) {
-        return "resource";
-    }
-    return "system";
-};
-
-const calcScaledSegments = (cap: number, maxSegments = RESOURCE_SEGMENT_MAX): number => {
-    const safeCap = Math.max(1, cap);
-    return Math.min(maxSegments, Math.max(1, Math.ceil(safeCap)));
-};
-
-const buildLogBuckets = (logs: string[]): Record<LogCategory, CategorizedLog[]> => {
-    const initial: Record<LogCategory, CategorizedLog[]> = {
-        room: [],
-        combat: [],
-        resource: [],
-        system: [],
-    };
-
-    logs.forEach((text, idx) => {
-        const category = classifyLog(text);
-        initial[category].push({
-            id: `${idx}-${text}`,
-            text,
-            category,
-        });
-    });
-
-    LOG_SECTION_ORDER.forEach((key) => {
-        initial[key] = initial[key].slice(-10).reverse();
-    });
-
-    return initial;
-};
-
-const splitLogEntry = (text: string): { emphasis?: string; detail: string } => {
-    const normalized = text.trim();
-    const match = normalized.match(/^(.*?[：:])\s*(.+)$/);
-    if (match) {
-        return {
-            emphasis: match[1].trim(),
-            detail: match[2].trim(),
-        };
-    }
-    return { detail: normalized };
-};
-const buildLogEntryView = (entry: CategorizedLog, order: number): LogEntryView => {
-    const { emphasis, detail } = splitLogEntry(entry.text);
-    return {
-        id: entry.id,
-        category: entry.category,
-        text: entry.text,
-        indexLabel: (order + 1).toString().padStart(2, "0"),
-        emphasis,
-        detail,
-    };
-};
-
-const calcLevelClass = (ratio: number, threshold: ThresholdRule): string => {
-    if (threshold.warning === THRESHOLD_DISABLED || threshold.critical === THRESHOLD_DISABLED) {
-        return "";
-    }
-    const warning = Math.max(0, Math.min(1, threshold.warning));
-    const critical = Math.max(0, Math.min(1, threshold.critical));
-    if (ratio <= critical) return "is-critical";
-    if (ratio <= warning) return "is-warning";
-    return "is-safe";
-};
-
-const mergeSpendPreview = (base: ResourceSpendPreview, key: ResourceSpendKey, amount: number): void => {
-    const normalized = Math.max(0, Math.floor(amount));
-    if (normalized <= 0) return;
-    base[key] = Math.max(base[key] ?? 0, normalized);
-};
-
-const ACTION_BADGE_LABELS: Record<ActionDeltaBadge["resource"], string> = {
-    hp: "HP",
-    defense: "Def",
-    defenseMax: "Def Max",
-    skillPoint: "SP",
-    food: "Food",
-    coin: "Coin",
-    xp: "XP",
-    xpLevel: "Lv",
-    extraAtk: "ATK Extra",
-    scroll: "Scroll",
-};
-
-const getActionBadgeLabel = (badge: ActionDeltaBadge): string => badge.label ?? ACTION_BADGE_LABELS[badge.resource];
-
-const getActionPrimaryLabel = (action: RoomAction): string => action.displayLabel ?? action.label;
-
-const getActionBadgeHint = (badge: ActionDeltaBadge): ActionDeltaHint | undefined => {
-    if (badge.hint) return badge.hint;
-    if (!badge.range) return undefined;
-    if (badge.range.max > 0 && badge.range.min > 0) return "plusplus";
-    if (badge.range.max > 0 && badge.range.min < 0) return "plusminus";
-    if (badge.range.max > 0 && badge.range.min === 0) return "plusmaybe";
-    return undefined;
-};
-
-const mergeSpendPreviewFromBadge = (preview: ResourceSpendPreview, badge: ActionDeltaBadge): void => {
-    if (typeof badge.amount !== "number" || badge.amount >= 0) return;
-    switch (badge.resource) {
-        case "hp":
-            mergeSpendPreview(preview, "hp", Math.abs(badge.amount));
-            break;
-        case "defense":
-            mergeSpendPreview(preview, "defense", Math.abs(badge.amount));
-            break;
-        case "defenseMax":
-            mergeSpendPreview(preview, "defenseMax", Math.abs(badge.amount));
-            break;
-        case "skillPoint":
-            mergeSpendPreview(preview, "skillPoint", Math.abs(badge.amount));
-            break;
-        case "food":
-            mergeSpendPreview(preview, "food", Math.abs(badge.amount));
-            break;
-        case "coin":
-            mergeSpendPreview(preview, "coin", Math.abs(badge.amount));
-            break;
-        case "extraAtk":
-            mergeSpendPreview(preview, "extraAtk", Math.abs(badge.amount));
-            break;
-        case "scroll":
-            mergeSpendPreview(preview, "scroll", Math.abs(badge.amount));
-            break;
-        default:
-            break;
-    }
-};
-
-const applyActionBadgesToRanges = (ranges: ResourceDeltaRanges, badges: ActionDeltaBadge[] | undefined): void => {
-    badges?.forEach((badge) => {
-        const rangeMin = badge.range?.min ?? badge.amount;
-        const rangeMax = badge.range?.max ?? badge.amount;
-        if (typeof rangeMin !== "number" || typeof rangeMax !== "number") return;
-        switch (badge.resource) {
-            case "hp":
-            case "defense":
-            case "defenseMax":
-            case "skillPoint":
-            case "food":
-            case "coin":
-            case "xp":
-            case "xpLevel":
-            case "extraAtk":
-                addDeltaRange(ranges, badge.resource, rangeMin, rangeMax);
-                break;
-            default:
-                break;
-        }
-    });
-};
-
-const hasSpendPreview = (preview: ResourceSpendPreview): boolean =>
-    Object.values(preview).some((value) => typeof value === "number" && value > 0);
-
-const addDeltaRange = (ranges: ResourceDeltaRanges, key: ResourceGainKey, minDelta: number, maxDelta: number): void => {
-    const prev = ranges[key] ?? { min: 0, max: 0 };
-    ranges[key] = {
-        min: prev.min + minDelta,
-        max: prev.max + maxDelta,
-    };
-};
-
-const applySpendPreviewAsNegativeRanges = (ranges: ResourceDeltaRanges, spendPreview: ResourceSpendPreview): void => {
-    if (spendPreview.hp) addDeltaRange(ranges, "hp", -spendPreview.hp, -spendPreview.hp);
-    if (spendPreview.defense) addDeltaRange(ranges, "defense", -spendPreview.defense, -spendPreview.defense);
-    if (spendPreview.defenseMax) addDeltaRange(ranges, "defenseMax", -spendPreview.defenseMax, -spendPreview.defenseMax);
-    if (spendPreview.skillPoint) addDeltaRange(ranges, "skillPoint", -spendPreview.skillPoint, -spendPreview.skillPoint);
-    if (spendPreview.food) addDeltaRange(ranges, "food", -spendPreview.food, -spendPreview.food);
-    if (spendPreview.coin) addDeltaRange(ranges, "coin", -spendPreview.coin, -spendPreview.coin);
-    if (spendPreview.extraAtk) addDeltaRange(ranges, "extraAtk", -spendPreview.extraAtk, -spendPreview.extraAtk);
-};
-
-const buildGainPreviewFromRanges = (ranges: ResourceDeltaRanges): ResourceGainPreview => {
-    const preview: ResourceGainPreview = {};
-    const keys: ResourceGainKey[] = ["hp", "defense", "defenseMax", "skillPoint", "food", "coin", "xp", "xpLevel", "extraAtk"];
-
-    keys.forEach((key) => {
-        const range = ranges[key];
-        if (!range) return;
-        if (range.max > 0 && range.min > 0) {
-            preview[key] = "plusplus";
-        } else if (range.max > 0 && range.min < 0) {
-            preview[key] = "plusminus";
-        } else if (range.max > 0 && range.min === 0) {
-            preview[key] = "plusmaybe";
-        }
-    });
-
-    return preview;
-};
-
-const hasGainPreview = (preview: ResourceGainPreview): boolean =>
-    Object.values(preview).some((value) => value === "plusplus" || value === "plusminus" || value === "plusmaybe");
-
-const gainHintText = (hint?: ResourceGainHint, prefix = ""): string => {
-    if (hint === "plusminus") return `${prefix}+-`;
-    if (hint === "plusmaybe") return `${prefix}+?`;
-    if (hint === "plusplus") return `${prefix}++`;
-    return "";
-};
-
-const getShopBuyValueById = (itemId: string): (typeof SHOP_BUY_POOL)[number]["value"] | undefined =>
-    SHOP_BUY_POOL.find((item) => item.id === itemId)?.value;
-
-const getChestRewardValueById = (rewardId: string): (typeof CHEST_REWARD_POOL)[number]["value"] | undefined =>
-    CHEST_REWARD_POOL.find((item) => item.id === rewardId)?.value;
-
-const isKnownScroll = (value: string | null | undefined): value is keyof typeof SCROLL_INFO => {
-    return Boolean(value && value in SCROLL_INFO);
-};
-
-const DISABLED_THRESHOLD_RULE: ThresholdRule = {
-    warning: THRESHOLD_DISABLED,
-    critical: THRESHOLD_DISABLED,
-};
-
-const getCharacterHoverHint = (character: CharacterTuple): CharacterHoverHint =>
-    CHARACTER_HOVER_HINTS[character[0]] ?? {
-        trait: "特色：冒险风格均衡。",
-        skill: `${character[6]}：按战况灵活使用。`,
-    };
-
-const getCharacterSkillHint = (character: CharacterTuple | null): string | null => {
-    if (!character) return null;
-    return CHARACTER_HOVER_HINTS[character[0]]?.skill ?? `${character[6]}：按战况灵活使用。`;
-};
-
-const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
-
-const scoreByBands = (value: number, bands: readonly { max: number; score: number }[]): number => {
-    const matched = bands.find((band) => value <= band.max);
-    return matched?.score ?? 0;
-};
-
-const calcDangerIndex = ({
-    stage,
-    floor,
-    room,
-    hp,
-    defense,
-    food,
-    combat,
-}: {
-    stage: Stage;
-    floor: number;
-    room: number;
-    hp: number;
-    defense: number;
-    food: number;
-    combat: { monsterName: string; monsterHp: number; monsterAtk: number; isBoss: boolean };
-}): number => {
-    if (stage === "menu" || stage === "character") {
-        return 1;
-    }
-
-    const floorScore = Math.max(0, floor - 1) * DANGER_INDEX_RULES.floorStep;
-    const roomScore = Math.max(0, room - 1) * DANGER_INDEX_RULES.roomStep;
-    const hpScore = scoreByBands(hp, DANGER_INDEX_RULES.hpBands);
-    const defenseScore = scoreByBands(defense, DANGER_INDEX_RULES.defenseBands);
-    const foodScore = scoreByBands(food, DANGER_INDEX_RULES.foodBands);
-
-    let combatPressure = 0;
-    if (combat.monsterName) {
-        const monsterHpScore = Math.min(DANGER_INDEX_RULES.monsterHpScoreMax, combat.monsterHp / DANGER_INDEX_RULES.monsterHpDivisor);
-        const monsterAtkScore = Math.min(DANGER_INDEX_RULES.monsterAtkScoreMax, combat.monsterAtk / DANGER_INDEX_RULES.monsterAtkDivisor);
-        combatPressure =
-            DANGER_INDEX_RULES.combatScore +
-            monsterHpScore +
-            monsterAtkScore +
-            (combat.isBoss ? DANGER_INDEX_RULES.bossScore : 0);
-    } else if (stage === "event") {
-        combatPressure = DANGER_INDEX_RULES.eventScore;
-    }
-
-    const totalScore = floorScore + roomScore + hpScore + defenseScore + foodScore + combatPressure;
-    const normalizedScore =
-        (clamp(totalScore, DANGER_INDEX_RULES.minScore, DANGER_INDEX_RULES.maxScore) - DANGER_INDEX_RULES.minScore) /
-        Math.max(1, DANGER_INDEX_RULES.maxScore - DANGER_INDEX_RULES.minScore);
-
-    return Math.max(1, Math.min(5, Math.round(normalizedScore * 4) + 1));
-};
-
-function useDeltaClass(value: number): "" | "delta-up" | "delta-down" {
-    const prevRef = useRef(value);
-    const [deltaClass, setDeltaClass] = useState<"" | "delta-up" | "delta-down">("");
-
-    useEffect(() => {
-        if (value === prevRef.current) return;
-        setDeltaClass(value > prevRef.current ? "delta-up" : "delta-down");
-        const timer = window.setTimeout(() => setDeltaClass(""), 420);
-        prevRef.current = value;
-        return () => window.clearTimeout(timer);
-    }, [value]);
-
-    return deltaClass;
-}
-
-function SegmentedResource({ icon, label, value, max, displayValue, segments, consumeCount = 0, gainHint, secondaryGainHint, secondaryGainHintPrefix = "", valuePrefix, tone = "hp", threshold }: SegmentedResourceProps): JSX.Element {
-    const safeMax = Math.max(1, max);
-    const clampedValue = Math.max(0, Math.min(value, safeMax));
-    const fillRatio = clampedValue / safeMax;
-    const segmentCount = Math.min(RESOURCE_SEGMENT_MAX, Math.max(1, Math.floor(segments ?? safeMax)));
-    const filledCount = Math.round(fillRatio * segmentCount);
-    const consumeTailCount = Math.max(0, Math.min(filledCount, Math.floor(consumeCount)));
-    const levelClass = calcLevelClass(fillRatio, threshold);
-    const deltaClass = useDeltaClass(value);
-    return (
-        <div className={`resource resource-${tone} ${levelClass} ${deltaClass}`}>
-            <div className="resource-head">
-                <span className="resource-label">
-                    <span className="resource-icon" aria-hidden="true">
-                        {icon}
-                    </span>
-                    {label}
-                    {gainHint && (
-                        <span className={`resource-label-hint ${gainHint === "plusminus" ? "is-mixed" : gainHint === "plusmaybe" ? "is-maybe" : ""}`}>
-                            {gainHintText(gainHint)}
-                        </span>
-                    )}
-                    {secondaryGainHint && (
-                        <span className={`resource-label-hint ${secondaryGainHint === "plusminus" ? "is-mixed" : secondaryGainHint === "plusmaybe" ? "is-maybe" : ""}`}>
-                            {gainHintText(secondaryGainHint, secondaryGainHintPrefix)}
-                        </span>
-                    )}
-                </span>
-                <strong className="resource-value">
-                    {valuePrefix}
-                    {displayValue ?? `${Math.max(0, value)}/${safeMax}`}
-                </strong>
-            </div>
-            <div
-                className="segment-bar"
-                role="img"
-                aria-label={`${label} ${Math.max(0, value)} / ${safeMax}`}
-                style={{ gridTemplateColumns: `repeat(${segmentCount}, minmax(0, 1fr))` }}
-            >
-                {Array.from({ length: segmentCount }, (_, idx) => {
-                    const isOn = idx < filledCount;
-                    const isConsumePulse = isOn && consumeTailCount > 0 && idx >= filledCount - consumeTailCount;
-                    const className = ["segment", isOn ? "on" : "", isConsumePulse ? "consume-pulse" : ""].filter(Boolean).join(" ");
-                    return <span key={`${label}-${idx}`} className={className} />;
-                })}
-            </div>
-        </div>
-    );
-}
-
-function IconStripResource({ icon, label, value, unit, maxValue, segments, consumeCount = 0, gainHint, tone = "path", threshold }: IconStripResourceProps): JSX.Element {
-    const safeUnit = Math.max(1, unit);
-    const safeMax = Math.max(1, maxValue ?? value);
-    const maxUnits = Math.min(RESOURCE_SEGMENT_MAX, Math.max(1, Math.ceil(segments ?? safeMax / safeUnit)));
-    const ratio = Math.max(0, Math.min(value, safeMax)) / safeMax;
-    const capped = Math.round(ratio * maxUnits);
-    const consumeTailCount = Math.max(0, Math.min(capped, Math.floor(consumeCount)));
-    const levelClass = calcLevelClass(ratio, threshold);
-    const deltaClass = useDeltaClass(value);
-
-    return (
-        <div className={`resource resource-${tone} ${levelClass} ${deltaClass}`}>
-            <div className="resource-head">
-                <span className="resource-label">
-                    <span className="resource-icon" aria-hidden="true">
-                        {icon}
-                    </span>
-                    {label}
-                    {gainHint && (
-                        <span className={`resource-label-hint ${gainHint === "plusminus" ? "is-mixed" : gainHint === "plusmaybe" ? "is-maybe" : ""}`}>
-                            {gainHintText(gainHint)}
-                        </span>
-                    )}
-                </span>
-                <strong className="resource-value">
-                    {value}/{safeMax}
-                </strong>
-            </div>
-            <div className="icon-strip" role="img" aria-label={`${label} ${value} / ${safeMax}`}>
-                {Array.from({ length: maxUnits }, (_, idx) => {
-                    const isOn = idx < capped;
-                    const isConsumePulse = isOn && consumeTailCount > 0 && idx >= capped - consumeTailCount;
-                    const className = ["icon-node", isOn ? "on" : "", isConsumePulse ? "consume-pulse" : ""].filter(Boolean).join(" ");
-                    return <span key={`${label}-icon-${idx}`} className={className} />;
-                })}
-            </div>
-        </div>
-    );
-}
-
-function ActionDeltaBadgePill({ badge, tone }: { badge: ActionDeltaBadge; tone: ActionDeltaBadgeTone }): JSX.Element {
-    const hint = getActionBadgeHint(badge);
-    const rangeMin = badge.range?.min;
-    const isPositive = hint ? hint !== "plusminus" : typeof badge.amount === "number" ? badge.amount > 0 : typeof rangeMin === "number" ? rangeMin >= 0 : false;
-    const amountText =
-        hint
-            ? gainHintText(hint)
-            : typeof badge.amount === "number"
-                ? `${badge.amount > 0 ? "+" : ""}${badge.amount}`
-                : "";
-    return (
-        <span className={`action-delta-pill is-${tone} ${isPositive ? "is-positive" : "is-negative"}`}>
-            <span className="action-delta-pill-amount">{amountText}</span>
-            <span className="action-delta-pill-label">{getActionBadgeLabel(badge)}</span>
-        </span>
-    );
-}
-
-function ActionStatusPill({ text }: { text: string }): JSX.Element {
-    return (
-        <span className="action-status-pill">
-            <span className="action-status-pill-text">{text}</span>
-        </span>
-    );
-}
-
-function ActionButtonContent({ action }: { action: RoomAction }): JSX.Element {
-    const primaryLabel = getActionPrimaryLabel(action);
-    const hasBadges = Boolean(action.costBadges?.length || action.rewardBadges?.length || action.disabledReason);
-
-    if (!hasBadges) {
-        return (
-            <>
-                <span className="action-button-label">{primaryLabel}</span>
-            </>
-        );
-    }
-
-    return (
-        <span className="action-button-content">
-            <span className="action-button-label-row">
-                <span className="action-button-label">{primaryLabel}</span>
-            </span>
-            <span className="action-delta-pill-row">
-                {action.costBadges?.map((badge, idx) => (
-                    <ActionDeltaBadgePill key={`cost-${action.id}-${badge.resource}-${idx}`} badge={badge} tone="cost" />
-                ))}
-                {action.rewardBadges?.map((badge, idx) => (
-                    <ActionDeltaBadgePill key={`reward-${action.id}-${badge.resource}-${idx}`} badge={badge} tone="reward" />
-                ))}
-                {action.disabledReason ? <ActionStatusPill text={action.disabledReason} /> : null}
-            </span>
-        </span>
-    );
-}
-
-type XpCompositeResourceProps = {
-    xp: number;
-    xpMax: number;
-    xpLevel: number;
-    xpGainHint?: ResourceGainHint;
-    levelGainHint?: ResourceGainHint;
-};
-
-type MonsterCompositeResourceProps = {
-    hp: number;
-    hpMax: number;
-    atk: number;
-    atkMax: number;
-};
-
-type ProgressCompositeResourceProps = {
-    room: number;
-    roomMax: number;
-    floor: number;
-    floorMax: number;
-};
-
-function XpCompositeResource({ xp, xpMax, xpLevel, xpGainHint, levelGainHint }: XpCompositeResourceProps): JSX.Element {
-    const safeXpMax = Math.max(1, xpMax);
-    const safeXp = Math.max(0, Math.min(xp, safeXpMax));
-    const xpRatio = safeXp / safeXpMax;
-
-    const safeLevel = Math.max(1, xpLevel);
-    const levelScaleMax = XP_LEVEL_SEGMENT_MAX;
-    const levelRatio = Math.max(0, Math.min(safeLevel, levelScaleMax)) / levelScaleMax;
-    const xpSegments = XP_PROGRESS_SEGMENT_MAX;
-    const levelSegments = levelScaleMax;
-    const xpFilled = Math.round(xpRatio * xpSegments);
-    const levelFilled = Math.round(levelRatio * levelSegments);
-
-    const xpDelta = useDeltaClass(xp);
-    const levelDelta = useDeltaClass(xpLevel);
-    const deltaClass = xpDelta === "delta-down" || levelDelta === "delta-down" ? "delta-down" : xpDelta || levelDelta;
-
-    return (
-        <div className={`resource resource-xp ${deltaClass}`}>
-            <div className="resource-head">
-                <span className="resource-label">
-                    <span className="resource-icon" aria-hidden="true">
-                        ✧
-                    </span>
-                    经验
-                    {xpGainHint && (
-                        <span className={`resource-label-hint ${xpGainHint === "plusminus" ? "is-mixed" : xpGainHint === "plusmaybe" ? "is-maybe" : ""}`}>
-                            {gainHintText(xpGainHint)}
-                        </span>
-                    )}
-                    {levelGainHint && (
-                        <span className={`resource-label-hint ${levelGainHint === "plusminus" ? "is-mixed" : levelGainHint === "plusmaybe" ? "is-maybe" : ""}`}>
-                            {gainHintText(levelGainHint, "Lv")}
-                        </span>
-                    )}
-                </span>
-            </div>
-            <div className="xp-composite" role="img" aria-label={`经验 XP ${safeXp} / ${safeXpMax}，等级 ${safeLevel} / ${levelScaleMax}`}>
-                <div className="xp-lane xp-lane-thin">
-                    <span className="xp-lane-tag">XP</span>
-                    <div className="xp-segment-grid" style={{ gridTemplateColumns: `repeat(${xpSegments}, minmax(0, 1fr))` }}>
-                        {Array.from({ length: xpSegments }, (_, idx) => (
-                            <span key={`xp-${idx}`} className={idx < xpFilled ? "xp-segment xp-segment-progress on" : "xp-segment xp-segment-progress"} />
-                        ))}
-                    </div>
-                    <span className="xp-lane-value">
-                        {safeXp}/{safeXpMax}
-                    </span>
-                </div>
-                <div className="xp-lane xp-lane-thick">
-                    <span className="xp-lane-tag">Lv</span>
-                    <div className="xp-segment-grid" style={{ gridTemplateColumns: `repeat(${levelSegments}, minmax(0, 1fr))` }}>
-                        {Array.from({ length: levelSegments }, (_, idx) => (
-                            <span key={`lv-${idx}`} className={idx < levelFilled ? "xp-segment xp-segment-level on" : "xp-segment xp-segment-level"} />
-                        ))}
-                    </div>
-                    <span className="xp-lane-value">
-                        {safeLevel}/{levelScaleMax}
-                    </span>
-                </div>
-            </div>
-        </div>
-    );
-}
-
-function MonsterCompositeResource({ hp, hpMax, atk, atkMax }: MonsterCompositeResourceProps): JSX.Element {
-    const safeHpMax = Math.max(1, hpMax);
-    const safeAtkMax = Math.max(1, atkMax);
-    const clampedHp = Math.max(0, Math.min(hp, safeHpMax));
-    const clampedAtk = Math.max(0, Math.min(atk, safeAtkMax));
-    const segments = MONSTER_SEGMENT_MAX;
-    const hpFilled = Math.round((clampedHp / safeHpMax) * segments);
-    const atkFilled = Math.round((clampedAtk / safeAtkMax) * segments);
-
-    const hpDelta = useDeltaClass(hp);
-    const atkDelta = useDeltaClass(atk);
-    const deltaClass = hpDelta === "delta-down" || atkDelta === "delta-down" ? "delta-down" : hpDelta || atkDelta;
-
-    return (
-        <div className={`resource resource-monster ${deltaClass}`}>
-            <div className="resource-head">
-                <span className="resource-label">
-                    <span className="resource-icon" aria-hidden="true">
-                        ☠
-                    </span>
-                    怪物
-                </span>
-            </div>
-            <div className="monster-composite" role="img" aria-label={`怪物生命 ${clampedHp} / ${safeHpMax}，攻击 ${clampedAtk} / ${safeAtkMax}`}>
-                <div className="monster-row">
-                    <span className="monster-tag">生命</span>
-                    <div className="monster-segment-bar">
-                        {Array.from({ length: segments }, (_, idx) => (
-                            <span
-                                key={`monster-hp-${idx}`}
-                                className={idx < hpFilled ? "segment monster-segment-hp on" : "segment monster-segment-hp"}
-                            />
-                        ))}
-                    </div>
-                    <span className="monster-value">
-                        {clampedHp}/{safeHpMax}
-                    </span>
-                </div>
-                <div className="monster-row">
-                    <span className="monster-tag">ATK</span>
-                    <div className="monster-segment-bar">
-                        {Array.from({ length: segments }, (_, idx) => (
-                            <span
-                                key={`monster-atk-${idx}`}
-                                className={idx < atkFilled ? "segment monster-segment-atk on" : "segment monster-segment-atk"}
-                            />
-                        ))}
-                    </div>
-                    <span className="monster-value">
-                        {clampedAtk}/{safeAtkMax}
-                    </span>
-                </div>
-            </div>
-        </div>
-    );
-}
-
-function ProgressCompositeResource({ room, roomMax, floor, floorMax }: ProgressCompositeResourceProps): JSX.Element {
-    const safeRoomMax = Math.max(1, roomMax);
-    const safeFloorMax = Math.max(1, floorMax);
-    const clampedRoom = Math.max(0, Math.min(room, safeRoomMax));
-    const clampedFloor = Math.max(0, Math.min(floor, safeFloorMax));
-
-    const roomSegments = safeRoomMax;
-    const floorSegments = safeFloorMax;
-    const roomFilled = Math.round((clampedRoom / safeRoomMax) * roomSegments);
-    const floorFilled = Math.round((clampedFloor / safeFloorMax) * floorSegments);
-
-    const roomDelta = useDeltaClass(room);
-    const floorDelta = useDeltaClass(floor);
-    const deltaClass = roomDelta === "delta-down" || floorDelta === "delta-down" ? "delta-down" : roomDelta || floorDelta;
-
-    return (
-        <div className={`resource resource-progress ${deltaClass}`}>
-            <div className="resource-head">
-                <span className="resource-label">
-                    <span className="resource-icon" aria-hidden="true">
-                        🧭
-                    </span>
-                    进度
-                </span>
-            </div>
-            <div className="progress-composite" role="img" aria-label={`房间 ${clampedRoom} / ${safeRoomMax}，层数 ${clampedFloor} / ${safeFloorMax}`}>
-                <div className="progress-row progress-row-thin">
-                    <span className="progress-tag">房间</span>
-                    <div className="progress-segment-grid" style={{ gridTemplateColumns: `repeat(${roomSegments}, minmax(0, 1fr))` }}>
-                        {Array.from({ length: roomSegments }, (_, idx) => (
-                            <span
-                                key={`progress-room-${idx}`}
-                                className={idx < roomFilled ? "progress-segment progress-segment-room on" : "progress-segment progress-segment-room"}
-                            />
-                        ))}
-                    </div>
-                    <span className="progress-value">
-                        {clampedRoom}/{safeRoomMax}
-                    </span>
-                </div>
-
-                <div className="progress-row progress-row-thick">
-                    <span className="progress-tag">层数</span>
-                    <div className="progress-segment-grid" style={{ gridTemplateColumns: `repeat(${floorSegments}, minmax(0, 1fr))` }}>
-                        {Array.from({ length: floorSegments }, (_, idx) => (
-                            <span
-                                key={`progress-floor-${idx}`}
-                                className={idx < floorFilled ? "progress-segment progress-segment-floor on" : "progress-segment progress-segment-floor"}
-                            />
-                        ))}
-                    </div>
-                    <span className="progress-value">
-                        {clampedFloor}/{safeFloorMax}
-                    </span>
-                </div>
-            </div>
-        </div>
-    );
-}
-
 export function App(): JSX.Element {
     const developerPanelDefaultPosition = { x: 24, y: 24 };
     const [stage, setStage] = useState<Stage>("menu");
     const [, setTick] = useState(0);
     const [showWelcomeFx, setShowWelcomeFx] = useState(false);
     const [showVictoryFx, setShowVictoryFx] = useState(false);
-    const [welcomeFxOrigin, setWelcomeFxOrigin] = useState({ x: 0.5, y: 0.5 });
-    const [welcomeFxKey, setWelcomeFxKey] = useState(0);
     const [victoryFxKey, setVictoryFxKey] = useState(0);
     const [combatIntroTriggerKey, setCombatIntroTriggerKey] = useState(0);
     const [combatActionTriggerKey, setCombatActionTriggerKey] = useState(0);
@@ -921,7 +108,6 @@ export function App(): JSX.Element {
     const foodPeakRef = useRef(1);
     const coinPeakRef = useRef(1);
     const actionsRef = useRef<HTMLDivElement | null>(null);
-    const startButtonRef = useRef<HTMLButtonElement | null>(null);
     const actionAnimTimerRef = useRef<number | null>(null);
     const welcomeFxTimerRef = useRef<number | null>(null);
     const victoryFxTimerRef = useRef<number | null>(null);
@@ -1048,14 +234,18 @@ export function App(): JSX.Element {
     const shopInventory = stage === "event" && activeEvent === "shop_event" ? gameState.getShopInventoryView() : null;
     const developerNextRoomType = gameState.getDeveloperNextRoomType();
     const developerNextRoomKey = gameState.getDeveloperNextRoomKey();
-    const logBuckets = buildLogBuckets(snapshot.logs.slice(-48));
-    const logViews = LOG_SECTION_ORDER.reduce(
-        (acc, section) => {
-            acc[section] = logBuckets[section].map((entry, index) => buildLogEntryView(entry, index));
-            return acc;
-        },
-        { room: [], combat: [], resource: [], system: [] } as Record<LogCategory, LogEntryView[]>
-    );
+    const logTimeline = buildLogTimeline(snapshot.logs, 10);
+    const logTimelineGroups = logTimeline.reduce<LogTimelineGroupItem[]>((items, entry, index) => {
+        const previousEntry = index > 0 ? logTimeline[index - 1] : null;
+        const previousGroupIndex = items[index - 1]?.groupIndex ?? 0;
+        const groupIndex = previousEntry && entry.category === previousEntry.category ? previousGroupIndex : previousGroupIndex + (index === 0 ? 0 : 1);
+        items.push({
+            entry,
+            groupIndex,
+            opacity: Math.max(0.1, 1 - Math.min(groupIndex, 3) * 0.4),
+        });
+        return items;
+    }, []);
     const thresholdRule = (rule: ThresholdRule): ThresholdRule => (stage === "menu" ? DISABLED_THRESHOLD_RULE : rule);
 
     const developerControls: DeveloperControl[] = [
@@ -1100,6 +290,17 @@ export function App(): JSX.Element {
         { label: "地牢层数", value: `${FLOOR} 层` },
         { label: "房间事件", value: "多分支事件" },
         { label: "战斗风格", value: "文字策略" },
+    ];
+    const menuRoutePreview = [
+        { label: "选角", detail: "确认职业手感" },
+        { label: "B1-B3", detail: "预判路线和消耗" },
+        { label: `B${FLOOR}`, detail: "面对终焉Boss" },
+    ];
+    const menuResourceFocus = [
+        { label: "HP", text: "生命线", tone: "hp" },
+        { label: "Food", text: "续航", tone: "food" },
+        { label: "Coin", text: "商店", tone: "coin" },
+        { label: "Scroll", text: "反转", tone: "scroll" },
     ];
 
     const adjustDeveloperScalar = (field: DeveloperScalarField, delta: number) => {
@@ -1403,22 +604,27 @@ export function App(): JSX.Element {
         return buildGainPreviewFromRanges(ranges);
     };
 
+    const applyActionResourcePreview = (action: RoomAction) => {
+        if (action.disabledReason) {
+            clearHoveredResourcePreview();
+            return;
+        }
+
+        const spendPreview = buildActionSpendPreview(action);
+        const gainPreview = buildActionGainPreview(action, spendPreview);
+        setHoveredSpendPreview(hasSpendPreview(spendPreview) ? spendPreview : null);
+        setHoveredGainPreview(hasGainPreview(gainPreview) ? gainPreview : null);
+    };
+
     const getSpendPreviewHandlers = (action: RoomAction) => {
         if (action.disabledReason) {
             return {};
         }
 
-        const applyPreview = () => {
-            const spendPreview = buildActionSpendPreview(action);
-            const gainPreview = buildActionGainPreview(action, spendPreview);
-            setHoveredSpendPreview(hasSpendPreview(spendPreview) ? spendPreview : null);
-            setHoveredGainPreview(hasGainPreview(gainPreview) ? gainPreview : null);
-        };
-
         return {
-            onMouseEnter: applyPreview,
+            onMouseEnter: () => applyActionResourcePreview(action),
             onMouseLeave: clearHoveredResourcePreview,
-            onFocus: applyPreview,
+            onFocus: () => applyActionResourcePreview(action),
             onBlur: clearHoveredResourcePreview,
         };
     };
@@ -1517,24 +723,14 @@ export function App(): JSX.Element {
     }, [showDeveloperPanel, developerPanelDragging]);
 
     const triggerWelcomeFx = () => {
-        const buttonRect = startButtonRef.current?.getBoundingClientRect();
-        if (buttonRect) {
-            setWelcomeFxOrigin({
-                x: (buttonRect.left + buttonRect.width / 2) / window.innerWidth,
-                y: (buttonRect.top + buttonRect.height / 2) / window.innerHeight,
-            });
-        } else {
-            setWelcomeFxOrigin({ x: 0.5, y: 0.5 });
-        }
         setShowWelcomeFx(true);
-        setWelcomeFxKey((key) => key + 1);
         if (welcomeFxTimerRef.current !== null) {
             window.clearTimeout(welcomeFxTimerRef.current);
         }
         welcomeFxTimerRef.current = window.setTimeout(() => {
             setShowWelcomeFx(false);
             welcomeFxTimerRef.current = null;
-        }, 3280);
+        }, 1000);
     };
 
     useEffect(() => {
@@ -2003,47 +1199,10 @@ export function App(): JSX.Element {
                 </div>
             )}
             {showWelcomeFx && (
-                <div
-                    key={welcomeFxKey}
-                    className="welcome-fx"
-                    role="status"
-                    aria-live="polite"
-                    style={
-                        {
-                            "--welcome-origin-x": `${(welcomeFxOrigin.x * 100).toFixed(2)}vw`,
-                            "--welcome-origin-y": `${(welcomeFxOrigin.y * 100).toFixed(2)}vh`,
-                        } as React.CSSProperties
-                    }
-                >
-                    <div className="welcome-fx-shards" aria-hidden="true">
-                        {[
-                            { dx: "-30vw", dy: "-20vh", size: "14px", delay: "40ms", duration: "2260ms", rotate: "-420deg" },
-                            { dx: "-18vw", dy: "-28vh", size: "10px", delay: "0ms", duration: "2120ms", rotate: "-320deg" },
-                            { dx: "22vw", dy: "-24vh", size: "12px", delay: "70ms", duration: "2200ms", rotate: "380deg" },
-                            { dx: "34vw", dy: "-10vh", size: "16px", delay: "120ms", duration: "2360ms", rotate: "460deg" },
-                            { dx: "-26vw", dy: "18vh", size: "11px", delay: "110ms", duration: "2180ms", rotate: "-360deg" },
-                            { dx: "28vw", dy: "20vh", size: "13px", delay: "160ms", duration: "2320ms", rotate: "410deg" },
-                        ].map((shard, idx) => (
-                            <span
-                                key={`welcome-shard-${idx}`}
-                                className="welcome-fx-shard"
-                                style={
-                                    {
-                                        "--welcome-shard-x": shard.dx,
-                                        "--welcome-shard-y": shard.dy,
-                                        "--welcome-shard-rotate": shard.rotate,
-                                        width: shard.size,
-                                        height: shard.size,
-                                        animationDelay: shard.delay,
-                                        animationDuration: shard.duration,
-                                    } as React.CSSProperties
-                                }
-                            />
-                        ))}
-                    </div>
+                <div className="welcome-fx" role="status" aria-live="polite">
                     <div className="welcome-fx-inner">
-                        <span className="welcome-fx-kicker">欢迎你，冒险者</span>
-                        <strong className="welcome-fx-title">FALCON CRYPT</strong>
+                        <span className="welcome-fx-kicker">新冒险已准备</span>
+                        <strong className="welcome-fx-title">选择角色</strong>
                     </div>
                 </div>
             )}
@@ -2053,36 +1212,50 @@ export function App(): JSX.Element {
                         <div className="menu-hero-copy">
                             <span className="menu-hero-kicker">FalconCrypt</span>
                             <h1 className="menu-hero-title">
-                                遗迹不是地图，
-                                <br />
-                                是一台会吞噬判断的仪表盘。
+                                四层遗迹，资源先行。
                             </h1>
                             <p className="menu-hero-text">
-                                文字冒险为核心，围绕地图预判、资源波动与房间事件，可视化地向地牢深处推进。
+                                选定角色后进入地牢，在地图预判、房间事件和战斗消耗之间做取舍。
                             </p>
                             <div className="menu-hero-actions">
-                                <button ref={startButtonRef} data-action-id="start-new-run" onClick={() => triggerAction("start-new-run", startNewRun)}>
+                                <button className="menu-primary-action" data-action-id="start-new-run" onClick={() => triggerAction("start-new-run", startNewRun)}>
                                     进入遗迹
                                 </button>
-                                <span className="menu-hero-caption">先选角色，再进入四层地牢，围绕资源和路径做持续取舍。</span>
                             </div>
                         </div>
-                        <div className="menu-hero-sigil" aria-hidden="true">
-                            <div className="menu-hero-sigil-core" />
-                            <div className="menu-hero-sigil-ring menu-hero-sigil-ring-outer" />
-                            <div className="menu-hero-sigil-ring menu-hero-sigil-ring-mid" />
-                            <div className="menu-hero-sigil-ring menu-hero-sigil-ring-inner" />
-                            <div className="menu-hero-sigil-axis menu-hero-sigil-axis-a" />
-                            <div className="menu-hero-sigil-axis menu-hero-sigil-axis-b" />
-                        </div>
-                        <div className="menu-hero-metrics">
+                        <div className="menu-hero-brief" aria-label="冒险摘要">
                             {menuHeroStats.map((item) => (
-                                <div key={item.label} className="menu-hero-metric">
+                                <div key={item.label} className="menu-hero-stat">
                                     <span>{item.label}</span>
                                     <strong>{item.value}</strong>
                                 </div>
                             ))}
                         </div>
+                        <aside className="menu-hero-board" aria-label="冒险路线预览">
+                            <header className="menu-board-head">
+                                <span>本局路线</span>
+                                <strong>B1-B{FLOOR}</strong>
+                            </header>
+                            <div className="menu-depth-map">
+                                {menuRoutePreview.map((item, index) => (
+                                    <div key={item.label} className="menu-depth-step">
+                                        <span className="menu-depth-index">{index + 1}</span>
+                                        <span className="menu-depth-copy">
+                                            <strong>{item.label}</strong>
+                                            <span>{item.detail}</span>
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="menu-resource-preview" aria-label="资源关注点">
+                                {menuResourceFocus.map((item) => (
+                                    <div key={item.label} className={`menu-resource-token menu-resource-${item.tone}`}>
+                                        <span>{item.label}</span>
+                                        <strong>{item.text}</strong>
+                                    </div>
+                                ))}
+                            </div>
+                        </aside>
                     </section>
                 </section>
             ) : (
@@ -2090,7 +1263,6 @@ export function App(): JSX.Element {
                     <section className="left-panel stage-panel-main">
                         <div className="map-canvas-row">
                             <div>
-                                <header className="panel-title">地图</header>
                                 <div className="map-panel">
                                     <div className="map-floor">
                                         <div className="map-floor-title">当前层 B{snapshot.dungeon.floor}</div>
@@ -2136,7 +1308,6 @@ export function App(): JSX.Element {
                                 </div>
                             </div>
                             <div className="map-canvas-box">
-                                <header className="panel-title">动画</header>
                                 <GameCanvas
                                     dangerLevel={dangerLevel}
                                     combatIntroTriggerKey={combatIntroTriggerKey}
@@ -2151,431 +1322,126 @@ export function App(): JSX.Element {
                             </div>
                         </div>
 
-                        <header className="panel-title">日志</header>
-                        <div className="log-grid" aria-label="按类别分组日志">
-                            {LOG_SECTION_ORDER.map((section) => (
-                                <section key={section} className={`log-lane log-lane-${section} ${logViews[section].length > 3 ? "is-scrollable" : ""}`}>
-                                    <header className="log-lane-head">
-                                        <div>
-                                            <span className="log-lane-kicker">{section.toUpperCase()}</span>
-                                            <span className="log-lane-title">{LOG_SECTION_TITLES[section]}</span>
-                                        </div>
-                                        <span className="log-lane-count">{logViews[section].length}</span>
-                                    </header>
-                                    <div className={`log-lane-list ${logViews[section].length > 3 ? "is-scrollable" : ""}`}>
-                                        {logViews[section].length === 0 ? (
-                                            <div className="log-empty">
-                                                <span>暂无记录</span>
-                                                <strong>该轨道还没有新的事件回波。</strong>
-                                            </div>
-                                        ) : (
-                                            logViews[section].map((entry) => (
-                                                <article
-                                                    key={entry.id}
-                                                    className={`log-entry log-entry-${entry.category} ${entry.detail ? "" : "log-entry-detail-standalone"}`.trim()}
-                                                >
-                                                    {entry.detail ? <span className="log-entry-index">{entry.indexLabel}</span> : null}
-                                                    <span className="log-entry-line">
-                                                        {entry.detail && entry.emphasis ? (
-                                                            <>
-                                                                <strong className="log-entry-emphasis">{entry.emphasis}</strong>
-                                                                <span className="log-entry-detail">{entry.detail}</span>
-                                                            </>
-                                                        ) : entry.detail ? (
-                                                            <span className="log-entry-detail log-entry-detail-full">{entry.detail}</span>
-                                                        ) : (
-                                                            <strong className="log-entry-emphasis log-entry-detail-only">{entry.emphasis}</strong>
-                                                        )}
-                                                    </span>
-                                                </article>
-                                            ))
-                                        )}
-                                    </div>
-                                </section>
-                            ))}
-                        </div>
-                        <div className="actions" ref={actionsRef}>
-                            {pendingScroll ? (
-                                <>
-                                    <button data-action-id="pending-scroll-accept" onClick={() => triggerAction("pending-scroll-accept", () => resolvePendingScroll(true))}>
-                                        替换为 {pendingScroll}
-                                    </button>
-                                    <button data-action-id="pending-scroll-keep" onClick={() => triggerAction("pending-scroll-keep", () => resolvePendingScroll(false))}>
-                                        保留当前卷轴
-                                    </button>
-                                </>
-                            ) : (
-                                <>
-                                    {stage === "character" &&
-                                        charOptions.map((c, i) => {
-                                            const hint = getCharacterHoverHint(c);
-                                            return (
-                                                <button
-                                                    key={c[0]}
-                                                    className="character-option-btn"
-                                                    data-action-id={`character-${i}`}
-                                                    onClick={() => triggerAction(`character-${i}`, () => confirmCharacter(i))}
-                                                    onMouseEnter={() => setHoveredChar(c)}
-                                                    onMouseLeave={() => setHoveredChar(null)}
-                                                    onFocus={() => setHoveredChar(c)}
-                                                    onBlur={() => setHoveredChar(null)}
-                                                >
-                                                    <span className="character-option-label">
-                                                        选择 {c[0]} / {c[6]}
-                                                    </span>
-                                                    <span className="character-option-tip" aria-hidden="true">
-                                                        <span>{hint.trait}</span>
-                                                        <span>{hint.skill}</span>
-                                                    </span>
-                                                </button>
-                                            );
-                                        })}
-                                    {stage === "explore" && (
-                                        <>
-                                            <button data-action-id="enter-room" onClick={() => triggerAction("enter-room", enterRoom)}>
-                                                {exploreEnterLabel}
-                                            </button>
-                                            {snapshot.player.scroll === "治疗术" && (
-                                                <button
-                                                    className="scroll-action-btn"
-                                                    data-action-id="explore-heal-scroll"
-                                                    onClick={() => triggerAction("explore-heal-scroll", useHealScrollInExplore, false)}
-                                                    onMouseEnter={applyExploreHealScrollPreview}
-                                                    onMouseLeave={clearHoveredResourcePreview}
-                                                    onFocus={applyExploreHealScrollPreview}
-                                                    onBlur={clearHoveredResourcePreview}
-                                                >
-                                                    使用治疗术
-                                                    {renderScrollTooltip("治疗术")}
-                                                </button>
-                                            )}
-                                        </>
-                                    )}
-                                    {stage === "event" &&
-                                        activeEvent &&
-                                        (activeEvent === "shop_event" && shopInventory ? (
-                                            <>
-                                                <div className="shop-board">
-                                                    <div className="shop-section">
-                                                        <div className="shop-title">买入</div>
-                                                        <div className="shop-list">
-                                                            {shopInventory.buy.map((action) => (
-                                                                <button
-                                                                    key={action.id}
-                                                                    data-action-id={action.id}
-                                                                    onClick={() => triggerAction(action.id, () => executeRoomAction(action.id), false)}
-                                                                    disabled={Boolean(action.disabledReason)}
-                                                                    title={action.disabledReason}
-                                                                    {...getSpendPreviewHandlers(action)}
-                                                                >
-                                                                    <ActionButtonContent action={action} />
-                                                                </button>
-                                                            ))}
-                                                        </div>
-                                                    </div>
-                                                    <div className="shop-section">
-                                                        <div className="shop-title">卖出</div>
-                                                        <div className="shop-list">
-                                                            {shopInventory.sell.map((action) => (
-                                                                <button
-                                                                    key={action.id}
-                                                                    data-action-id={action.id}
-                                                                    onClick={() => triggerAction(action.id, () => executeRoomAction(action.id), false)}
-                                                                    disabled={Boolean(action.disabledReason)}
-                                                                    title={action.disabledReason}
-                                                                    {...getSpendPreviewHandlers(action)}
-                                                                >
-                                                                    <ActionButtonContent action={action} />
-                                                                </button>
-                                                            ))}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                {gameState
-                                                    .getRoomActions(activeEvent)
-                                                    .filter((action) => action.id === "leave")
-                                                    .map((action) => (
-                                                        <button
-                                                            key={action.id}
-                                                            data-action-id={action.id}
-                                                            onClick={() => triggerAction(action.id, leaveCurrentEvent)}
-                                                            disabled={Boolean(action.disabledReason)}
-                                                            title={action.disabledReason}
-                                                            {...getSpendPreviewHandlers(action)}
-                                                        >
-                                                            <ActionButtonContent action={action} />
-                                                        </button>
-                                                    ))}
-                                            </>
-                                        ) : (
-                                            <>
-                                                {activeEvent === "mine_event" && (
-                                                    <div className="event-tip">提示：本房间只要执行过挖掘，离开后将跳过通用房间结算。</div>
-                                                )}
-                                                {gameState
-                                                    .getRoomActions(activeEvent)
-                                                    .filter((action) => {
-                                                        if (eventAwaitingLeave) return action.id === "leave";
-                                                        if (
-                                                            (activeEvent === "chest_event" ||
-                                                                activeEvent === "trap_event" ||
-                                                                activeEvent === "bonfire_event") &&
-                                                            action.id === "leave"
-                                                        ) {
-                                                            return false;
-                                                        }
-                                                        return true;
-                                                    })
-                                                    .map((action) => (
-                                                        <button
-                                                            key={action.id}
-                                                            className={
-                                                                (activeEvent === "forge_event" && (action.id === "weapon" || action.id === "armor" || action.id.startsWith("forge_armor_"))) ||
-                                                                    (activeEvent === "trap_event" && (action.id === "disarm" || action.id === "rush")) ||
-                                                                    (activeEvent === "statue_event" && (action.id === "pray" || action.id === "offer"))
-                                                                    ? "scroll-action-btn"
-                                                                    : undefined
-                                                            }
-                                                            data-action-id={action.id}
-                                                            onClick={() =>
-                                                                action.id === "leave"
-                                                                    ? triggerAction(action.id, leaveCurrentEvent)
-                                                                    : triggerAction(action.id, () => executeRoomAction(action.id))
-                                                            }
-                                                            disabled={Boolean(action.disabledReason)}
-                                                            title={action.disabledReason}
-                                                            {...getSpendPreviewHandlers(action)}
-                                                        >
-                                                            <ActionButtonContent action={action} />
-                                                            {activeEvent === "trap_event" ? renderTrapActionTooltip(action.id) : null}
-                                                            {activeEvent === "statue_event" ? renderStatueActionTooltip(action.id) : null}
-                                                            {activeEvent === "forge_event" && action.id === "weapon"
-                                                                ? renderActionTooltip(FORGE_HOVER_HINTS.weapon)
-                                                                : null}
-                                                            {activeEvent === "forge_event" && action.id === "armor"
-                                                                ? renderActionTooltip(FORGE_HOVER_HINTS.armor)
-                                                                : null}
-                                                            {activeEvent === "forge_event" && action.id === "forge_armor_thorns"
-                                                                ? renderActionTooltip(FORGE_HOVER_HINTS.thorns)
-                                                                : null}
-                                                            {activeEvent === "forge_event" && action.id === "forge_armor_heavy"
-                                                                ? renderActionTooltip(FORGE_HOVER_HINTS.heavy)
-                                                                : null}
-                                                        </button>
-                                                    ))}
-                                            </>
-                                        ))}
-                                    {stage === "combat" &&
-                                        gameState.getCombatActions().map((action) => (
-                                            <button
-                                                key={action.id}
-                                                className={action.id === "scroll" || action.id === "skill" || action.id === "critical" ? "scroll-action-btn" : undefined}
-                                                data-action-id={action.id}
-                                                onClick={() => triggerAction(action.id, () => handleCombatAction(action.id as CombatActionType), false)}
-                                                disabled={Boolean(action.disabledReason)}
-                                                title={action.disabledReason}
-                                                {...getSpendPreviewHandlers(action)}
+                        <ActionPanel
+                            actionsRef={actionsRef}
+                            pendingScroll={pendingScroll}
+                            stage={stage}
+                            charOptions={charOptions}
+                            activeEvent={activeEvent}
+                            eventAwaitingLeave={eventAwaitingLeave}
+                            shopInventory={shopInventory}
+                            exploreEnterLabel={exploreEnterLabel}
+                            playerScroll={snapshot.player.scroll}
+                            playerCharacter={snapshot.player.character}
+                            triggerAction={triggerAction}
+                            resolvePendingScroll={resolvePendingScroll}
+                            confirmCharacter={confirmCharacter}
+                            setHoveredChar={setHoveredChar}
+                            enterRoom={enterRoom}
+                            useHealScrollInExplore={useHealScrollInExplore}
+                            applyExploreHealScrollPreview={applyExploreHealScrollPreview}
+                            clearHoveredResourcePreview={clearHoveredResourcePreview}
+                            applyActionResourcePreview={applyActionResourcePreview}
+                            executeRoomAction={executeRoomAction}
+                            leaveCurrentEvent={leaveCurrentEvent}
+                            handleCombatAction={handleCombatAction}
+                            returnToMenu={returnToMenu}
+                            getSpendPreviewHandlers={getSpendPreviewHandlers}
+                            renderActionTooltip={renderActionTooltip}
+                            renderScrollTooltip={renderScrollTooltip}
+                            renderSkillTooltip={renderSkillTooltip}
+                            renderCriticalTooltip={renderCriticalTooltip}
+                            renderTrapActionTooltip={renderTrapActionTooltip}
+                            renderStatueActionTooltip={renderStatueActionTooltip}
+                        />
+
+                        {logTimelineGroups.length > 0 && (
+                            <section className="log-panel" aria-label="日志时间流">
+                                <header className="panel-title">日志</header>
+                                <div className="log-stream">
+                                    {logTimelineGroups.map(({ entry, groupIndex, opacity }) => {
+                                        return (
+                                            <article
+                                                key={entry.id}
+                                                className={`log-entry log-entry-${entry.category} ${groupIndex === 0 ? "is-latest-group" : ""}`}
+                                                style={{ "--log-entry-opacity": opacity } as React.CSSProperties}
                                             >
-                                                <ActionButtonContent action={action} />
-                                                {action.id === "critical" ? renderCriticalTooltip() : null}
-                                                {action.id === "scroll" ? renderScrollTooltip(snapshot.player.scroll) : null}
-                                                {action.id === "skill" ? renderSkillTooltip(snapshot.player.character) : null}
-                                            </button>
-                                        ))}
-                                    {stage === "gameover" && (
-                                        <button data-action-id="return-menu" onClick={() => triggerAction("return-menu", returnToMenu)}>
-                                            返回主页
-                                        </button>
-                                    )}
-                                </>
-                            )}
-                        </div>
+                                                <span className="log-entry-kind" aria-hidden="true" />
+                                                <span className="log-entry-line">
+                                                    {entry.detail && entry.emphasis ? (
+                                                        <>
+                                                            <strong className="log-entry-emphasis">{entry.emphasis}</strong>
+                                                            <span className="log-entry-detail">{entry.detail}</span>
+                                                        </>
+                                                    ) : entry.detail ? (
+                                                        <span className="log-entry-detail log-entry-detail-full">{entry.detail}</span>
+                                                    ) : (
+                                                        <strong className="log-entry-emphasis log-entry-detail-only">{entry.emphasis}</strong>
+                                                    )}
+                                                </span>
+                                            </article>
+                                        );
+                                    })}
+                                </div>
+                            </section>
+                        )}
                     </section>
 
                     <div className="right-side-cluster">
-                        <section className="right-panel stage-panel-side">
-                            <section className="status-hero" aria-label="状态概览">
-                                <div className="status-hero-main">
-                                    <span className="status-hero-kicker">运行状态</span>
-                                    <div className="status-hero-value-row">
-                                        <strong className="status-hero-stage">{currentStageLabel}</strong>
-                                        <span className="status-hero-dot" aria-hidden="true" />
-                                        <span className="status-hero-focus">{currentFocusLabel}</span>
-                                    </div>
-                                </div>
-                                <div className="status-hero-badge">
-                                    <span>危险指数</span>
-                                    <strong>{dangerLevel}/5</strong>
-                                </div>
-                            </section>
-                            <header className="panel-title">状态</header>
-                            <div className="status-overview">
-                                <div className="overview-chip">
-                                    <span>角色</span>
-                                    <strong>{displayCharacter?.[0] ?? "-"}</strong>
-                                </div>
-                                <div className="overview-chip">
-                                    <span>{previewChar ? "技能" : stage === "event" ? "事件" : "怪物"}</span>
-                                    <strong>{currentFocusLabel}</strong>
-                                </div>
-                                <div className="overview-chip">
-                                    <span>卷轴</span>
-                                    <strong className={(hoveredSpendPreview?.scroll ?? 0) > 0 ? "scroll-preview consume-pulse" : "scroll-preview"}>{displayScroll}</strong>
-                                </div>
-                                <div className="overview-chip">
-                                    <span>攻击</span>
-                                    <strong className="atk-line">
-                                        <span className="atk-main">[{atkMin}~{atkMax}]</span>
-                                        {displayExtraAtk > 0 ? (
-                                            <span className={`atk-bonus ${hasTempExtraAtkInDisplay ? "atk-bonus-temp" : ""}`}>+{displayExtraAtk}</span>
-                                        ) : (
-                                            ""
-                                        )}
-                                        {hoveredGainPreview?.extraAtk && (
-                                            <span
-                                                className={`atk-gain-hint ${hoveredGainPreview.extraAtk === "plusminus" ? "is-mixed" : hoveredGainPreview.extraAtk === "plusmaybe" ? "is-maybe" : ""}`}
-                                            >
-                                                {gainHintText(hoveredGainPreview.extraAtk)}
-                                            </span>
-                                        )}
-                                    </strong>
-                                </div>
-                            </div>
-
-                            <div className="resource-stack">
-                                <SegmentedResource
-                                    icon="❤"
-                                    label="生命"
-                                    value={displayHp}
-                                    max={playerHpMax}
-                                    segments={hpSegments}
-                                    consumeCount={hoveredSpendPreview?.hp ?? 0}
-                                    gainHint={hoveredGainPreview?.hp}
-                                    tone="hp"
-                                    threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.hp)}
-                                />
-                                <SegmentedResource
-                                    valuePrefix={armorEffectStars}
-                                    icon="🛡"
-                                    label="护甲"
-                                    value={displayDefense}
-                                    max={defenseMax}
-                                    displayValue={defenseDisplayValue}
-                                    segments={defSegments}
-                                    consumeCount={hoveredSpendPreview?.defense ?? 0}
-                                    gainHint={hoveredGainPreview?.defense}
-                                    secondaryGainHint={hoveredGainPreview?.defenseMax}
-                                    secondaryGainHintPrefix="Max"
-                                    tone="shield"
-                                    threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.shield)}
-                                />
-                                {stage === "combat" && (
-                                    <IconStripResource
-                                        icon="✦"
-                                        label="技能点"
-                                        value={snapshot.combat.skillPoint}
-                                        unit={1}
-                                        maxValue={12}
-                                        consumeCount={hoveredSpendPreview?.skillPoint ?? 0}
-                                        gainHint={hoveredGainPreview?.skillPoint}
-                                        tone="path"
-                                        threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.path)}
-                                    />
-                                )}
-                                <IconStripResource
-                                    icon="🍖"
-                                    label="食物"
-                                    value={displayFood}
-                                    unit={1}
-                                    maxValue={foodMax}
-                                    segments={foodSegments}
-                                    consumeCount={hoveredSpendPreview?.food ?? 0}
-                                    gainHint={hoveredGainPreview?.food}
-                                    tone="food"
-                                    threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.food)}
-                                />
-                                <IconStripResource
-                                    icon="🪙"
-                                    label="金币"
-                                    value={displayCoin}
-                                    unit={1}
-                                    maxValue={coinMax}
-                                    segments={coinSegments}
-                                    consumeCount={hoveredSpendPreview?.coin ?? 0}
-                                    gainHint={hoveredGainPreview?.coin}
-                                    tone="coin"
-                                    threshold={thresholdRule(RESOURCE_THRESHOLD_RULES.coin)}
-                                />
-                                {stage === "combat" && (
-                                    <MonsterCompositeResource
-                                        hp={snapshot.combat.monsterHp || 0}
-                                        hpMax={monsterMax}
-                                        atk={effectiveMonsterAtk}
-                                        atkMax={monsterAtkMax}
-                                    />
-                                )}
-                                <XpCompositeResource
-                                    xp={snapshot.player.xp}
-                                    xpMax={XP_MAX}
-                                    xpLevel={snapshot.player.xpLevel}
-                                    xpGainHint={hoveredGainPreview?.xp}
-                                    levelGainHint={hoveredGainPreview?.xpLevel}
-                                />
-                                <ProgressCompositeResource room={snapshot.dungeon.roomIdx} roomMax={roomMax} floor={snapshot.dungeon.floor} floorMax={floorMax} />
-                            </div>
-                        </section>
+                        <StatusSidebar
+                            stage={stage}
+                            previewChar={previewChar}
+                            displayCharacter={displayCharacter}
+                            currentStageLabel={currentStageLabel}
+                            currentFocusLabel={currentFocusLabel}
+                            dangerLevel={dangerLevel}
+                            displayScroll={displayScroll}
+                            atkMin={atkMin}
+                            atkMax={atkMax}
+                            displayExtraAtk={displayExtraAtk}
+                            hasTempExtraAtkInDisplay={hasTempExtraAtkInDisplay}
+                            hoveredSpendPreview={hoveredSpendPreview}
+                            hoveredGainPreview={hoveredGainPreview}
+                            displayHp={displayHp}
+                            playerHpMax={playerHpMax}
+                            hpSegments={hpSegments}
+                            armorEffectStars={armorEffectStars}
+                            displayDefense={displayDefense}
+                            defenseMax={defenseMax}
+                            defenseDisplayValue={defenseDisplayValue}
+                            defSegments={defSegments}
+                            skillPoint={snapshot.combat.skillPoint}
+                            displayFood={displayFood}
+                            foodMax={foodMax}
+                            foodSegments={foodSegments}
+                            displayCoin={displayCoin}
+                            coinMax={coinMax}
+                            coinSegments={coinSegments}
+                            monsterHp={snapshot.combat.monsterHp || 0}
+                            monsterMax={monsterMax}
+                            effectiveMonsterAtk={effectiveMonsterAtk}
+                            monsterAtkMax={monsterAtkMax}
+                            xp={snapshot.player.xp}
+                            xpLevel={snapshot.player.xpLevel}
+                            room={snapshot.dungeon.roomIdx}
+                            roomMax={roomMax}
+                            floor={snapshot.dungeon.floor}
+                            floorMax={floorMax}
+                            thresholdRule={thresholdRule}
+                        />
 
                         {showDeveloperPanel && (
-                            <section
-                                className={`developer-panel${developerPanelDragging ? " is-dragging" : ""}`}
-                                ref={developerPanelRef}
-                                aria-label="开发者面板"
-                                style={{ left: `${developerPanelPosition.x}px`, top: `${developerPanelPosition.y}px` }}
+                            <DeveloperPanel
+                                controls={developerControls}
+                                dragging={developerPanelDragging}
+                                panelRef={developerPanelRef}
+                                position={developerPanelPosition}
+                                nextRoomKey={developerNextRoomKey}
+                                nextRoomType={developerNextRoomType}
                                 onPointerDown={handleDeveloperPanelPointerDown}
-                            >
-                                <header className="developer-panel-head">
-                                    <div>
-                                        <div className="developer-panel-kicker">开发者面板</div>
-                                        <strong>滚轮调值</strong>
-                                    </div>
-                                    <div className="developer-panel-head-tools">
-                                        <span className="developer-panel-shortcut">{DEV_PANEL_TOGGLE}</span>
-                                    </div>
-                                </header>
-                                <div className="developer-panel-note">将鼠标移到条目上滚动即可增减。隐藏项也会显示在这里。</div>
-                                <div className="developer-control-list">
-                                    {developerControls.map((control) => (
-                                        <button
-                                            key={control.key}
-                                            type="button"
-                                            className={`developer-control ${control.hidden ? "is-hidden-field" : ""}`}
-                                            onWheel={(event) => handleDeveloperWheel(event, control.key)}
-                                        >
-                                            <span className="developer-control-label">{control.label}</span>
-                                            <strong className="developer-control-value">{control.value}</strong>
-                                        </button>
-                                    ))}
-                                </div>
-                                <div className="developer-next-room">
-                                    <div className="developer-next-room-head">
-                                        <span>下个房间</span>
-                                        <strong>{developerNextRoomKey ?? "无"}</strong>
-                                    </div>
-                                    <div className="developer-room-type-grid">
-                                        {DEV_ROOM_TYPE_OPTIONS.map((eventType) => (
-                                            <button
-                                                key={eventType}
-                                                type="button"
-                                                className={`developer-room-type ${developerNextRoomType === eventType ? "is-active" : ""}`}
-                                                onClick={() => handleDeveloperRoomTypeChange(eventType)}
-                                                disabled={!developerNextRoomKey}
-                                            >
-                                                {DEV_ROOM_TYPE_LABELS[eventType]}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-                            </section>
+                                onWheelControl={handleDeveloperWheel}
+                                onRoomTypeChange={handleDeveloperRoomTypeChange}
+                            />
                         )}
                     </div>
                 </>

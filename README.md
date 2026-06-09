@@ -55,6 +55,8 @@ npm run preview
 ```text
 .
 ├─ dist/                        # 构建产物（可删除后重新 build）
+├─ docs/
+│  └─ guide.md                  # 游戏功能概要与核心玩法文档
 ├─ src/
 │  ├─ animations/               # 动画与特效逻辑模块
 │  │  ├─ combatAnimation.ts     # 针对战斗动画（震动、受伤特效等）
@@ -69,12 +71,10 @@ npm run preview
 │  ├─ App.tsx                   # 页面主容器、状态驱动的 React 组件渲染、资源消费预测 UI 与交互入口
 │  ├─ main.tsx                  # React 挂载入口
 │  └─ styles.css                # 全局样式与布局（包含所有的 CSS 动画与像素风格变量）
-├─ guide.md                     # 游戏功能概要与核心玩法文档
 ├─ index.html                   # Vite HTML 入口
 ├─ package.json                 # 脚本与依赖
 ├─ package-lock.json            # 锁定依赖版本
 ├─ tsconfig.json                # TS 编译配置
-├─ tsconfig.tsbuildinfo         # TS 增量构建缓存
 └─ vite.config.ts               # Vite 配置
 ```
 
