@@ -1,6 +1,10 @@
 # FalconCrypt 游戏功能文档
 
+[项目说明](../README.md) | [English README](../README_en.md)
+
 本文档仅聚焦游戏功能与规则本身，用于跨平台移植时的玩法对齐。
+
+> 本文保留了跨平台规则约定，部分数值和交互尚未与当前 Web 版本同步。当前实现以 [`constants.ts`](../src/game/constants.ts)、[`state.ts`](../src/game/state.ts) 和[单元测试](../src/game/state.spec.ts)为准。
 
 ## 1. 核心体验
 
